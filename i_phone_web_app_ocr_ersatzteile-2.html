@@ -7,73 +7,126 @@
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
 <style>
 body { margin:0; font-family:-apple-system,BlinkMacSystemFont,sans-serif; background:#0a0a0a; color:#fff; }
-#video { width:100vw; height:100vh; object-fit:cover; }
+
+#topStatus {
+  position:fixed; top:10px; left:50%; transform:translateX(-50%);
+  padding:8px 12px;
+  border-radius:10px;
+  background:rgba(0,0,0,0.6);
+  font-size:14px;
+  z-index:10;
+}
+
+#videoContainer {
+  position:relative;
+  width:100vw;
+  height:50vh;
+  overflow:hidden;
+  background:#000;
+}
+
+#video {
+  width:100%; height:100%; object-fit:cover;
+}
+
 #overlay {
-  position:absolute; top:50%; left:50%;
-  width:60%; height:20%;
+  position:absolute;
+  top:50%; left:50%;
   transform:translate(-50%,-50%);
   border:3px solid #E20612;
   border-radius:12px;
-  resize:both; overflow:auto;
+  width:60%;
+  height:25%;
+  pointer-events:none;
 }
+
 #controls {
-  position:fixed; bottom:10px; left:10px; right:10px;
-  background:rgba(20,20,20,0.85);
+  position:fixed; bottom:0; left:0; right:0;
+  background:rgba(20,20,20,0.9);
   backdrop-filter: blur(10px);
-  padding:12px; border-radius:16px;
+  padding:12px;
 }
+
 input, button {
   width:100%; margin-top:6px; padding:12px;
   font-size:16px; border-radius:10px; border:none;
 }
 button { background:#E20612; color:white; }
-#hint {
-  position:fixed; top:10px; left:50%; transform:translateX(-50%);
-  background:rgba(0,0,0,0.6); padding:8px 12px;
-  border-radius:10px; font-size:14px;
+
+#zoom {
+  width:100%; margin-top:8px;
 }
+
 #history {
-  max-height:120px; overflow:auto; font-size:12px; margin-top:6px;
+  max-height:90px; overflow:auto; font-size:12px; margin-top:6px;
 }
+
 .item { border-bottom:1px solid #333; padding:4px; }
+
 </style>
 </head>
 <body>
-<div id="hint">Abstand anpassen, bis Text scharf ist</div>
-<video id="video" autoplay playsinline></video>
-<div id="overlay"></div>
+
+<div id="topStatus">Bereit</div>
+
+<div id="videoContainer">
+  <video id="video" autoplay playsinline></video>
+  <div id="overlay"></div>
+</div>
+
 <div id="controls">
   <button onclick="toggleCamera()">Kamera EIN/AUS</button>
-  <input id="manual" placeholder="Manuelle Bestellnummer">
+
+  <label>Zoom</label>
+  <input id="zoom" type="range" min="1" max="3" step="0.1" value="1" oninput="setZoom(this.value)">
+
+  <input id="manual" placeholder="Bestellnummer">
   <input id="qty" type="number" placeholder="Menge">
+
   <button onclick="scan()">Scannen</button>
   <button onclick="submitData()">Senden</button>
+
   <div id="history"></div>
 </div>
+
 <script>
 let video = document.getElementById('video');
 let overlay = document.getElementById('overlay');
+let status = document.getElementById('topStatus');
 let buffer = JSON.parse(localStorage.getItem('buffer')||'[]');
 let history = JSON.parse(localStorage.getItem('history')||'[]');
 let stream = null;
+let track = null;
 
 async function toggleCamera() {
   if(stream) {
     stream.getTracks().forEach(t=>t.stop());
-    video.srcObject = null;
     stream = null;
+    video.srcObject = null;
+    status.innerText = "Kamera aus";
   } else {
     stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
     video.srcObject = stream;
+    track = stream.getVideoTracks()[0];
+    status.innerText = "Kamera aktiv";
   }
 }
 
 toggleCamera();
 
+function setZoom(val) {
+  if(track && track.getCapabilities) {
+    const caps = track.getCapabilities();
+    if(caps.zoom) {
+      track.applyConstraints({ advanced:[{ zoom: val }] });
+    }
+  }
+}
+
 function updateHistory() {
   const container = document.getElementById('history');
-  container.innerHTML = history.slice(-10).reverse().map(i=>
-    `<div class="item">${i.number} | ${i.qty}</div>`
+  container.innerHTML = history.slice(-8).reverse().map(i=>
+    `<div class=\"item\">${i.number} | ${i.qty}</div>`
   ).join('');
 }
 updateHistory();
@@ -100,6 +153,24 @@ function getCropCanvas() {
   return canvas;
 }
 
+function sharpness(canvas) {
+  const ctx = canvas.getContext('2d');
+  const img = ctx.getImageData(0,0,canvas.width,canvas.height).data;
+
+  let gray = [];
+  for(let i=0;i<img.length;i+=4){
+    gray.push((img[i]+img[i+1]+img[i+2])/3);
+  }
+
+  let lap = [];
+  for(let i=1;i<gray.length-1;i++){
+    lap.push(Math.abs(gray[i-1]-2*gray[i]+gray[i+1]));
+  }
+
+  let variance = lap.reduce((a,b)=>a+b,0)/lap.length;
+  return variance;
+}
+
 function preprocess(canvas) {
   const ctx = canvas.getContext('2d');
   const img = ctx.getImageData(0,0,canvas.width,canvas.height);
@@ -114,6 +185,15 @@ function preprocess(canvas) {
 
 async function scan() {
   let canvas = getCropCanvas();
+
+  let sharp = sharpness(canvas);
+  if(sharp < 20) {
+    status.innerText = "zu unscharf";
+    return;
+  } else {
+    status.innerText = "ok";
+  }
+
   canvas = preprocess(canvas);
 
   const result = await Tesseract.recognize(canvas,'eng',{ tessedit_char_whitelist:'0123456789.-' });
@@ -124,7 +204,7 @@ async function scan() {
   if(match) {
     document.getElementById('manual').value = match[0];
   } else {
-    alert('Keine gültige Nummer erkannt');
+    status.innerText = "keine Nummer erkannt";
   }
 }
 
@@ -132,7 +212,10 @@ async function submitData() {
   const number = document.getElementById('manual').value;
   const qty = document.getElementById('qty').value;
 
-  if(!number || !qty) return alert('Fehlende Daten');
+  if(!number || !qty) {
+    status.innerText = "fehlende Daten";
+    return;
+  }
 
   const payload = { number, qty };
 
@@ -146,9 +229,11 @@ async function submitData() {
       headers:{ 'Content-Type':'application/json' },
       body: JSON.stringify(payload)
     });
+    status.innerText = "gesendet";
   } catch(e) {
     buffer.push(payload);
     localStorage.setItem('buffer',JSON.stringify(buffer));
+    status.innerText = "offline gespeichert";
   }
 }
 
@@ -167,7 +252,6 @@ setInterval(async ()=>{
   } catch(e) {}
 },10000);
 
-// disable gestures
 document.addEventListener('gesturestart', e=>e.preventDefault());
 document.addEventListener('dblclick', e=>e.preventDefault());
 </script>
