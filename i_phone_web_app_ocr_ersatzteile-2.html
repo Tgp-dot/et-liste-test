@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>OCR Ersatzteile</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+<style>
+body { margin:0; font-family:-apple-system,BlinkMacSystemFont,sans-serif; background:#0a0a0a; color:#fff; }
+#video { width:100vw; height:100vh; object-fit:cover; }
+#overlay {
+  position:absolute; top:50%; left:50%;
+  width:60%; height:20%;
+  transform:translate(-50%,-50%);
+  border:3px solid #E20612;
+  border-radius:12px;
+  resize:both; overflow:auto;
+}
+#controls {
+  position:fixed; bottom:10px; left:10px; right:10px;
+  background:rgba(20,20,20,0.85);
+  backdrop-filter: blur(10px);
+  padding:12px; border-radius:16px;
+}
+input, button {
+  width:100%; margin-top:6px; padding:12px;
+  font-size:16px; border-radius:10px; border:none;
+}
+button { background:#E20612; color:white; }
+#hint {
+  position:fixed; top:10px; left:50%; transform:translateX(-50%);
+  background:rgba(0,0,0,0.6); padding:8px 12px;
+  border-radius:10px; font-size:14px;
+}
+#history {
+  max-height:120px; overflow:auto; font-size:12px; margin-top:6px;
+}
+.item { border-bottom:1px solid #333; padding:4px; }
+</style>
+</head>
+<body>
+<div id="hint">Abstand anpassen, bis Text scharf ist</div>
+<video id="video" autoplay playsinline></video>
+<div id="overlay"></div>
+<div id="controls">
+  <button onclick="toggleCamera()">Kamera EIN/AUS</button>
+  <input id="manual" placeholder="Manuelle Bestellnummer">
+  <input id="qty" type="number" placeholder="Menge">
+  <button onclick="scan()">Scannen</button>
+  <button onclick="submitData()">Senden</button>
+  <div id="history"></div>
+</div>
+<script>
+let video = document.getElementById('video');
+let overlay = document.getElementById('overlay');
+let buffer = JSON.parse(localStorage.getItem('buffer')||'[]');
+let history = JSON.parse(localStorage.getItem('history')||'[]');
+let stream = null;
+
+async function toggleCamera() {
+  if(stream) {
+    stream.getTracks().forEach(t=>t.stop());
+    video.srcObject = null;
+    stream = null;
+  } else {
+    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
+    video.srcObject = stream;
+  }
+}
+
+toggleCamera();
+
+function updateHistory() {
+  const container = document.getElementById('history');
+  container.innerHTML = history.slice(-10).reverse().map(i=>
+    `<div class="item">${i.number} | ${i.qty}</div>`
+  ).join('');
+}
+updateHistory();
+
+function getCropCanvas() {
+  const rect = overlay.getBoundingClientRect();
+  const vRect = video.getBoundingClientRect();
+
+  const scaleX = video.videoWidth / vRect.width;
+  const scaleY = video.videoHeight / vRect.height;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = rect.width * scaleX;
+  canvas.height = rect.height * scaleY;
+  const ctx = canvas.getContext('2d');
+
+  ctx.drawImage(video,
+    (rect.left - vRect.left)*scaleX,
+    (rect.top - vRect.top)*scaleY,
+    rect.width*scaleX,
+    rect.height*scaleY,
+    0,0,canvas.width,canvas.height);
+
+  return canvas;
+}
+
+function preprocess(canvas) {
+  const ctx = canvas.getContext('2d');
+  const img = ctx.getImageData(0,0,canvas.width,canvas.height);
+  for (let i=0;i<img.data.length;i+=4) {
+    let avg = (img.data[i]+img.data[i+1]+img.data[i+2])/3;
+    let val = avg > 150 ? 255 : 0;
+    img.data[i]=img.data[i+1]=img.data[i+2]=val;
+  }
+  ctx.putImageData(img,0,0);
+  return canvas;
+}
+
+async function scan() {
+  let canvas = getCropCanvas();
+  canvas = preprocess(canvas);
+
+  const result = await Tesseract.recognize(canvas,'eng',{ tessedit_char_whitelist:'0123456789.-' });
+
+  let text = result.data.text.replace(/[^0-9.-]/g,'');
+  let match = text.match(/\d{3}-\d{3}\.\d{3}-\d{3}/);
+
+  if(match) {
+    document.getElementById('manual').value = match[0];
+  } else {
+    alert('Keine gültige Nummer erkannt');
+  }
+}
+
+async function submitData() {
+  const number = document.getElementById('manual').value;
+  const qty = document.getElementById('qty').value;
+
+  if(!number || !qty) return alert('Fehlende Daten');
+
+  const payload = { number, qty };
+
+  history.push(payload);
+  localStorage.setItem('history',JSON.stringify(history));
+  updateHistory();
+
+  try {
+    await fetch('YOUR_MS365_ENDPOINT',{
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch(e) {
+    buffer.push(payload);
+    localStorage.setItem('buffer',JSON.stringify(buffer));
+  }
+}
+
+setInterval(async ()=>{
+  if(buffer.length===0) return;
+  try {
+    for(let item of buffer) {
+      await fetch('YOUR_MS365_ENDPOINT',{
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify(item)
+      });
+    }
+    buffer=[];
+    localStorage.setItem('buffer','[]');
+  } catch(e) {}
+},10000);
+
+// disable gestures
+document.addEventListener('gesturestart', e=>e.preventDefault());
+document.addEventListener('dblclick', e=>e.preventDefault());
+</script>
+</body>
+</html>
