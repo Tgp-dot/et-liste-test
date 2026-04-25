@@ -184,7 +184,7 @@
 <body>
 <div id="root">
   <div class="header">
-    <span style="font-size:20px">🔧</span>
+    <span style="font-size:20px">🤰</span>
     <span class="header-title">Ersatzteile Scanner</span>
     <span class="header-badge" id="offline-badge" style="display:none">0 offline</span>
   </div>
@@ -226,7 +226,7 @@
       <!-- Debug preview -->
       <div id="debug-wrap">
         <canvas id="canvas-debug"></canvas>
-        <div class="debug-label">Debug: verarbeiteter Ausschnitt (was Tesseract sieht)</div>
+        <div class="debug-label">Debug</div>
       </div>
 
       <!-- Zoom -->
@@ -239,8 +239,8 @@
       <!-- Buttons row -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
         <button class="btn btn-accent" id="start-btn" onclick="startCamera()" style="grid-column:1/-1;margin:0">Kamera starten</button>
-        <button class="btn btn-toggle" id="autoscan-btn" onclick="toggleAutoscan()" style="display:none;margin:0">▶ Autoscan</button>
-        <button class="btn btn-outline btn-sm" id="snap-btn" onclick="doSnap()" style="display:none;margin:0">📷 Einzel-Scan</button>
+        <button class="btn btn-toggle" id="autoscan-btn" onclick="toggleAutoscan()" style="display:none;margin:0">Autoscan</button>
+        <button class="btn btn-outline btn-sm" id="snap-btn" onclick="doSnap()" style="display:none;margin:0">Single-Scan</button>
       </div>
       <button class="btn btn-outline btn-sm" id="stop-btn" style="display:none" onclick="stopCamera()">Kamera stoppen</button>
     </div>
@@ -734,7 +734,7 @@ function scheduleAutoscan(){
     if(!autoscanActive) return;
     await runOCR(true);
     scheduleAutoscan();
-  }, 1000);
+  }, 500);
 }
 
 // ═══════════════════════════════════
