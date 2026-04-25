@@ -97,7 +97,7 @@ button { background:#E20612; color:white; }
 <div id="controls">
   <button onclick="toggleCamera()">Kamera EIN/AUS</button>
 
-  <input id="manual" placeholder="Bestellnummer" style="width:100%">
+  <input id="manual" placeholder="Bestellnummer">
 
   <div class="row">
     <input id="qty" type="number" placeholder="Menge">
@@ -114,18 +114,23 @@ button { background:#E20612; color:white; }
 
 <script>
 let video=document.getElementById('video');
-let overlay=document.getElementById('overlay');
 let status=document.getElementById('topStatus');
 
 let stream=null;
-let track=null;
-
 let buffer=JSON.parse(localStorage.getItem('buffer')||'[]');
 let history=JSON.parse(localStorage.getItem('history')||'[]');
 
 const items={"420-098.001-013":"Schraube M1.7 xyz69"};
 
 function setQty(v){document.getElementById('qty').value=v;}
+
+function updateHistory(){
+  const el=document.getElementById('history');
+  el.innerHTML=history.slice(-10).reverse().map(i=>
+    `<div class='item'>${i.number} | ${i.qty}</div>`
+  ).join('');
+}
+updateHistory();
 
 async function toggleCamera(){
   try{
@@ -139,7 +144,6 @@ async function toggleCamera(){
 
     stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
     video.srcObject=stream;
-    track=stream.getVideoTracks()[0];
 
     await video.play();
     status.innerText="Kamera aktiv";
@@ -149,10 +153,10 @@ async function toggleCamera(){
 }
 
 function getCropCanvas(){
-  const rect=overlay.getBoundingClientRect();
+  const rect=document.getElementById('overlay').getBoundingClientRect();
   const vRect=video.getBoundingClientRect();
 
-  if(!video.videoWidth||!video.videoHeight) return document.createElement('canvas');
+  if(!video.videoWidth) return null;
 
   const sx=video.videoWidth/vRect.width;
   const sy=video.videoHeight/vRect.height;
@@ -172,55 +176,68 @@ function getCropCanvas(){
   return c;
 }
 
-function preprocess(c){
-  let ctx=c.getContext('2d');
-  let d=ctx.getImageData(0,0,c.width,c.height);
+function preprocess(canvas){
+  const ctx=canvas.getContext('2d');
+  const img=ctx.getImageData(0,0,canvas.width,canvas.height);
 
-  for(let i=0;i<d.data.length;i+=4){
-    let g=(d.data[i]+d.data[i+1]+d.data[i+2])/3;
-    let v=g>150?255:0;
-    d.data[i]=d.data[i+1]=d.data[i+2]=v;
+  for(let i=0;i<img.data.length;i+=4){
+    const g=(img.data[i]+img.data[i+1]+img.data[i+2])/3;
+    const v=g>160?255:0;
+    img.data[i]=img.data[i+1]=img.data[i+2]=v;
   }
-  ctx.putImageData(d,0,0);
-  return c;
-}
-
-// stabile aber deaktivierte Perspektivkorrektur (Fix für Crash)
-function warp(canvas){
+  ctx.putImageData(img,0,0);
   return canvas;
 }
 
 async function scan(){
-  if(!stream) return;
+  try{
+    if(!stream){status.innerText="Kamera nicht aktiv";return;}
+    if(typeof Tesseract==='undefined'){status.innerText="OCR nicht geladen";return;}
 
-  let c=getCropCanvas();
-  c=preprocess(c);
-  c=warp(c);
+    let c=getCropCanvas();
+    if(!c){status.innerText="kein Bild";return;}
 
-  let res=await Tesseract.recognize(c,'eng',{tessedit_char_whitelist:'0123456789.-'});
+    status.innerText="scanne...";
 
-  let t=res.data.text.replace(/[^0-9.-]/g,'');
-  let m=t.match(/\d{3}-\d{3}\.\d{3}-\d{3}/);
+    c=preprocess(c);
 
-  if(m){
-    document.getElementById('manual').value=m[0];
-    status.innerText=items[m[0]]||"Unbekannt";
+    const res=await Tesseract.recognize(c,'eng',{
+      tessedit_char_whitelist:'0123456789.-'
+    });
+
+    const text=(res.data.text||"").replace(/[^0-9.-]/g,'');
+    const match=text.match(/\d{3}-\d{3}\.\d{3}-\d{3}/);
+
+    if(match){
+      document.getElementById('manual').value=match[0];
+      status.innerText=items[match[0]]||"OK";
+    }else{
+      status.innerText="kein Treffer";
+    }
+
+  }catch(e){
+    status.innerText="Scan Fehler";
   }
 }
 
 async function submitData(){
-  let n=document.getElementById('manual').value;
-  let q=document.getElementById('qty').value;
+  const n=document.getElementById('manual').value;
+  const q=document.getElementById('qty').value;
 
   if(!n||!q){status.innerText="fehlend";return;}
 
-  let p={number:n,qty:q};
+  const p={number:n,qty:q};
 
   history.push(p);
   localStorage.setItem('history',JSON.stringify(history));
+  updateHistory();
 
   try{
-    await fetch('YOUR_MS365_ENDPOINT',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+    await fetch('YOUR_MS365_ENDPOINT',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(p)
+    });
     status.innerText="gesendet";
   }catch(e){
     buffer.push(p);
@@ -231,12 +248,20 @@ async function submitData(){
 setInterval(async()=>{
   if(buffer.length===0)return;
   try{
-    for(let i of buffer){
-      await fetch('YOUR_MS365_ENDPOINT',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(i)});
-    }
+    const copy=[...buffer];
     buffer=[];
     localStorage.setItem('buffer','[]');
-  }catch(e){}
+
+    for(const i of copy){
+      await fetch('YOUR_MS365_ENDPOINT',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(i)
+      });
+    }
+  }catch(e){
+    localStorage.setItem('buffer',JSON.stringify(buffer));
+  }
 },10000);
 </script>
 </body>
