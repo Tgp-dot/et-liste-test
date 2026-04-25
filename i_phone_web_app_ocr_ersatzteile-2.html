@@ -122,9 +122,7 @@ let track=null;
 let buffer=JSON.parse(localStorage.getItem('buffer')||'[]');
 let history=JSON.parse(localStorage.getItem('history')||'[]');
 
-const items={
-  "420-098.001-013":"Schraube M1.7 xyz69"
-};
+const items={"420-098.001-013":"Schraube M1.7 xyz69"};
 
 function setQty(v){document.getElementById('qty').value=v;}
 
@@ -158,43 +156,6 @@ function getCropCanvas(){
   return c;
 }
 
-function gray(data){
-  let g=[];
-  for(let i=0;i<data.length;i+=4){
-    g.push((data[i]+data[i+1]+data[i+2])/3);
-  }
-  return g;
-}
-
-function findCorners(gray,w,h){
-  let pts=[];
-  for(let y=1;y<h-1;y++){
-    for(let x=1;x<w-1;x++){
-      let i=y*w+x;
-      let v=gray[i];
-      if(v<40) continue;
-      pts.push({x,y});
-    }
-  }
-
-  if(pts.length<10) return null;
-
-  let tl=pts.reduce((a,p)=>p.x+p.y<a.x+a.y?p:a);
-  let tr=pts.reduce((a,p)=>p.x-p.y>a.x-a.y?p:a);
-  let bl=pts.reduce((a,p)=>p.y-p.x>a.y-a.x?p:a);
-  let br=pts.reduce((a,p)=>p.x+p.y>a.x+a.y?p:a);
-
-  return [tl,tr,br,bl];
-}
-
-function solveH(p1,p2,p3,p4){
-  return null; // simplified fallback
-}
-
-function warp(canvas){
-  return canvas;
-}
-
 function preprocess(c){
   let ctx=c.getContext('2d');
   let d=ctx.getImageData(0,0,c.width,c.height);
@@ -204,14 +165,109 @@ function preprocess(c){
     let v=g>150?255:0;
     d.data[i]=d.data[i+1]=d.data[i+2]=v;
   }
-
   ctx.putImageData(d,0,0);
   return c;
 }
 
+function warp(canvas){
+  const ctx=canvas.getContext('2d');
+  const w=canvas.width,h=canvas.height;
+  const src=ctx.getImageData(0,0,w,h);
+
+  const gray=(i)=> (src.data[i]+src.data[i+1]+src.data[i+2])/3;
+
+  let pts=[];
+  for(let y=0;y<h;y+=4){
+    for(let x=0;x<w;x+=4){
+      let i=(y*w+x)*4;
+      if(gray(i)<120) continue;
+      pts.push({x,y});
+    }
+  }
+
+  if(pts.length<20) return canvas;
+
+  let tl=pts.reduce((a,p)=>p.x+p.y<a.x+a.y?p:a);
+  let tr=pts.reduce((a,p)=>p.x-p.y>a.x-a.y?p:a);
+  let bl=pts.reduce((a,p)=>p.y-p.x>a.y-a.x?p:a);
+  let br=pts.reduce((a,p)=>p.x+p.y>a.x+a.y?p:a);
+
+  function solve(p){
+    const [p1,p2,p3,p4]=p;
+    const W=w,H=h;
+
+    let A=[],b=[];
+
+    function eq(px,py,ux,uy){
+      A.push([px,py,1,0,0,0,-ux*px,-ux*py]);b.push(ux);
+      A.push([0,0,0,px,py,1,-uy*px,-uy*py]);b.push(uy);
+    }
+
+    eq(p1.x,p1.y,0,0);
+    eq(p2.x,p2.y,W,0);
+    eq(p3.x,p3.y,W,H);
+    eq(p4.x,p4.y,0,H);
+
+    let M=A.map((r,i)=>r.concat([b[i]]));
+
+    for(let i=0;i<8;i++){
+      let max=i;
+      for(let j=i+1;j<8;j++) if(Math.abs(M[j][i])>Math.abs(M[max][i])) max=j;
+      [M[i],M[max]]=[M[max],M[i]];
+
+      for(let j=i+1;j<8;j++){
+        let f=M[j][i]/M[i][i];
+        for(let k=i;k<9;k++) M[j][k]-=f*M[i][k];
+      }
+    }
+
+    let x=new Array(8).fill(0);
+    for(let i=7;i>=0;i--){
+      let s=M[i][8];
+      for(let j=i+1;j<8;j++) s-=M[i][j]*x[j];
+      x[i]=s/M[i][i];
+    }
+
+    return x;
+  }
+
+  let h=solve([tl,tr,br,bl]);
+  if(!h) return canvas;
+
+  let out=document.createElement('canvas');
+  out.width=w;
+  out.height=h;
+  let octx=out.getContext('2d');
+  let outData=octx.createImageData(w,h);
+
+  function map(x,y){
+    let d=1/(h[6]*x+h[7]*y+1);
+    return {
+      x:(h[0]*x+h[1]*y+h[2])*d,
+      y:(h[3]*x+h[4]*y+h[5])*d
+    };
+  }
+
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      let p=map(x,y);
+      let ix=Math.floor(p.x),iy=Math.floor(p.y);
+      if(ix<0||iy<0||ix>=w||iy>=h) continue;
+      let i=(iy*w+ix)*4;
+      let o=(y*w+x)*4;
+      outData.data[o]=src.data[i];
+      outData.data[o+1]=src.data[i+1];
+      outData.data[o+2]=src.data[i+2];
+      outData.data[o+3]=255;
+    }
+  }
+
+  octx.putImageData(outData,0,0);
+  return out;
+}
+
 async function scan(){
   if(!stream) return;
-
   let c=getCropCanvas();
   c=preprocess(c);
   c=warp(c);
@@ -222,9 +278,8 @@ async function scan(){
   let m=t.match(/\d{3}-\d{3}\.\d{3}-\d{3}/);
 
   if(m){
-    let code=m[0];
-    document.getElementById('manual').value=code;
-    status.innerText=items[code]||"Unbekannt";
+    document.getElementById('manual').value=m[0];
+    status.innerText=items[m[0]]||"Unbekannt";
   }
 }
 
