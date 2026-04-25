@@ -4,13 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>OCR Ersatzteile</title>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+
+<script src="tesseract.min.js"></script>
+
 <style>
 html, body {
   margin:0;
   padding:0;
-  height:100%;
   overflow:hidden;
+  height:100%;
   font-family:-apple-system,BlinkMacSystemFont,sans-serif;
   background:#0a0a0a;
   color:#fff;
@@ -27,6 +29,8 @@ html, body {
   background:rgba(0,0,0,0.6);
   font-size:14px;
   z-index:20;
+  text-align:center;
+  min-width:60%;
 }
 
 #videoContainer {
@@ -60,41 +64,25 @@ html, body {
   bottom:0;
   left:0;
   right:0;
-  background:rgba(20,20,20,0.9);
-  backdrop-filter:blur(10px);
+  background:rgba(20,20,20,0.92);
   padding:12px;
 }
 
+.row { display:flex; gap:8px; }
+
 input, button {
-  width:100%;
-  margin-top:6px;
+  width:100%; margin-top:6px;
   padding:12px;
   font-size:16px;
   border-radius:10px;
   border:none;
 }
 
-button {
-  background:#E20612;
-  color:white;
-}
+button { background:#E20612; color:white; }
+.qtyBtn { flex:1; background:#333; }
 
-#zoom {
-  width:100%;
-  margin-top:8px;
-}
-
-#history {
-  max-height:90px;
-  overflow:auto;
-  font-size:12px;
-  margin-top:6px;
-}
-
-.item {
-  border-bottom:1px solid #333;
-  padding:4px;
-}
+#history { max-height:90px; overflow:auto; font-size:12px; margin-top:6px; }
+.item { border-bottom:1px solid #333; padding:4px; }
 </style>
 </head>
 <body>
@@ -109,11 +97,14 @@ button {
 <div id="controls">
   <button onclick="toggleCamera()">Kamera EIN/AUS</button>
 
-  <label>Zoom</label>
-  <input id="zoom" type="range" min="1" max="3" step="0.1" value="1" oninput="setZoom(this.value)">
-
   <input id="manual" placeholder="Bestellnummer">
-  <input id="qty" type="number" placeholder="Menge">
+
+  <div class="row">
+    <input id="qty" type="number" placeholder="Menge">
+    <button class="qtyBtn" onclick="setQty(10)">10</button>
+    <button class="qtyBtn" onclick="setQty(50)">50</button>
+    <button class="qtyBtn" onclick="setQty(100)">100</button>
+  </div>
 
   <button onclick="scan()">Scannen</button>
   <button onclick="submitData()">Senden</button>
@@ -122,147 +113,152 @@ button {
 </div>
 
 <script>
-let video = document.getElementById('video');
-let overlay = document.getElementById('overlay');
-let status = document.getElementById('topStatus');
-let buffer = JSON.parse(localStorage.getItem('buffer')||'[]');
-let history = JSON.parse(localStorage.getItem('history')||'[]');
-let stream = null;
-let track = null;
+let video=document.getElementById('video');
+let overlay=document.getElementById('overlay');
+let status=document.getElementById('topStatus');
+let stream=null;
+let track=null;
 
-async function toggleCamera() {
-  if(stream) {
-    stream.getTracks().forEach(t=>t.stop());
-    stream = null;
-    video.srcObject = null;
-    status.innerText = "Kamera aus";
-  } else {
-    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
-    video.srcObject = stream;
-    track = stream.getVideoTracks()[0];
-    status.innerText = "Kamera aktiv";
-  }
+let buffer=JSON.parse(localStorage.getItem('buffer')||'[]');
+let history=JSON.parse(localStorage.getItem('history')||'[]');
+
+const items={
+  "420-098.001-013":"Schraube M1.7 xyz69"
+};
+
+function setQty(v){document.getElementById('qty').value=v;}
+
+async function toggleCamera(){
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;status.innerText="Kamera aus";return;}
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+  video.srcObject=stream;
+  track=stream.getVideoTracks()[0];
+  status.innerText="Kamera aktiv";
 }
 
-function setZoom(val) {
-  if(track && track.getCapabilities) {
-    const caps = track.getCapabilities();
-    if(caps.zoom) {
-      track.applyConstraints({ advanced:[{ zoom: val }] });
+function getCropCanvas(){
+  const rect=overlay.getBoundingClientRect();
+  const vRect=video.getBoundingClientRect();
+
+  const sx=video.videoWidth/vRect.width;
+  const sy=video.videoHeight/vRect.height;
+
+  const c=document.createElement('canvas');
+  c.width=rect.width*sx;
+  c.height=rect.height*sy;
+
+  const ctx=c.getContext('2d');
+  ctx.drawImage(video,
+    (rect.left-vRect.left)*sx,
+    (rect.top-vRect.top)*sy,
+    rect.width*sx,
+    rect.height*sy,
+    0,0,c.width,c.height);
+
+  return c;
+}
+
+function gray(data){
+  let g=[];
+  for(let i=0;i<data.length;i+=4){
+    g.push((data[i]+data[i+1]+data[i+2])/3);
+  }
+  return g;
+}
+
+function findCorners(gray,w,h){
+  let pts=[];
+  for(let y=1;y<h-1;y++){
+    for(let x=1;x<w-1;x++){
+      let i=y*w+x;
+      let v=gray[i];
+      if(v<40) continue;
+      pts.push({x,y});
     }
   }
+
+  if(pts.length<10) return null;
+
+  let tl=pts.reduce((a,p)=>p.x+p.y<a.x+a.y?p:a);
+  let tr=pts.reduce((a,p)=>p.x-p.y>a.x-a.y?p:a);
+  let bl=pts.reduce((a,p)=>p.y-p.x>a.y-a.x?p:a);
+  let br=pts.reduce((a,p)=>p.x+p.y>a.x+a.y?p:a);
+
+  return [tl,tr,br,bl];
 }
 
-function updateHistory() {
-  const container = document.getElementById('history');
-  container.innerHTML = history.slice(-8).reverse().map(i=>
-    `<div class="item">${i.number} | ${i.qty}</div>`
-  ).join('');
+function solveH(p1,p2,p3,p4){
+  return null; // simplified fallback
 }
-updateHistory();
 
-function getCropCanvas() {
-  const rect = overlay.getBoundingClientRect();
-  const vRect = video.getBoundingClientRect();
-
-  const scaleX = video.videoWidth / vRect.width;
-  const scaleY = video.videoHeight / vRect.height;
-
-  const canvas = document.createElement('canvas');
-  canvas.width = rect.width * scaleX;
-  canvas.height = rect.height * scaleY;
-  const ctx = canvas.getContext('2d');
-
-  ctx.drawImage(video,
-    (rect.left - vRect.left)*scaleX,
-    (rect.top - vRect.top)*scaleY,
-    rect.width*scaleX,
-    rect.height*scaleY,
-    0,0,canvas.width,canvas.height);
-
+function warp(canvas){
   return canvas;
 }
 
-function preprocess(canvas) {
-  const ctx = canvas.getContext('2d');
-  const img = ctx.getImageData(0,0,canvas.width,canvas.height);
+function preprocess(c){
+  let ctx=c.getContext('2d');
+  let d=ctx.getImageData(0,0,c.width,c.height);
 
-  for (let i=0;i<img.data.length;i+=4) {
-    let avg = (img.data[i]+img.data[i+1]+img.data[i+2])/3;
-    let val = avg > 150 ? 255 : 0;
-    img.data[i]=img.data[i+1]=img.data[i+2]=val;
+  for(let i=0;i<d.data.length;i+=4){
+    let g=(d.data[i]+d.data[i+1]+d.data[i+2])/3;
+    let v=g>150?255:0;
+    d.data[i]=d.data[i+1]=d.data[i+2]=v;
   }
 
-  ctx.putImageData(img,0,0);
-  return canvas;
+  ctx.putImageData(d,0,0);
+  return c;
 }
 
-async function scan() {
-  let canvas = getCropCanvas();
-  canvas = preprocess(canvas);
+async function scan(){
+  if(!stream) return;
 
-  status.innerText = "scanne...";
+  let c=getCropCanvas();
+  c=preprocess(c);
+  c=warp(c);
 
-  const result = await Tesseract.recognize(canvas,'eng',{ tessedit_char_whitelist:'0123456789.-' });
+  let res=await Tesseract.recognize(c,'eng',{tessedit_char_whitelist:'0123456789.-'});
 
-  let text = result.data.text.replace(/[^0-9.-]/g,'');
-  let match = text.match(/\d{3}-\d{3}\.\d{3}-\d{3}/);
+  let t=res.data.text.replace(/[^0-9.-]/g,'');
+  let m=t.match(/\d{3}-\d{3}\.\d{3}-\d{3}/);
 
-  if(match) {
-    document.getElementById('manual').value = match[0];
-    status.innerText = "OK";
-  } else {
-    status.innerText = "keine Nummer erkannt";
+  if(m){
+    let code=m[0];
+    document.getElementById('manual').value=code;
+    status.innerText=items[code]||"Unbekannt";
   }
 }
 
-async function submitData() {
-  const number = document.getElementById('manual').value;
-  const qty = document.getElementById('qty').value;
+async function submitData(){
+  let n=document.getElementById('manual').value;
+  let q=document.getElementById('qty').value;
 
-  if(!number || !qty) {
-    status.innerText = "fehlende Daten";
-    return;
-  }
+  if(!n||!q){status.innerText="fehlend";return;}
 
-  const payload = { number, qty };
+  let p={number:n,qty:q};
 
-  history.push(payload);
+  history.push(p);
   localStorage.setItem('history',JSON.stringify(history));
-  updateHistory();
 
-  try {
-    await fetch('YOUR_MS365_ENDPOINT',{
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify(payload)
-    });
-    status.innerText = "gesendet";
-  } catch(e) {
-    buffer.push(payload);
+  try{
+    await fetch('YOUR_MS365_ENDPOINT',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+    status.innerText="gesendet";
+  }catch(e){
+    buffer.push(p);
     localStorage.setItem('buffer',JSON.stringify(buffer));
-    status.innerText = "offline gespeichert";
   }
 }
 
-setInterval(async ()=>{
-  if(buffer.length===0) return;
-  try {
-    for(let item of buffer) {
-      await fetch('YOUR_MS365_ENDPOINT',{
-        method:'POST',
-        headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify(item)
-      });
+setInterval(async()=>{
+  if(buffer.length===0)return;
+  try{
+    for(let i of buffer){
+      await fetch('YOUR_MS365_ENDPOINT',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(i)});
     }
     buffer=[];
     localStorage.setItem('buffer','[]');
-  } catch(e) {}
+  }catch(e){}
 },10000);
 
-document.addEventListener('gesturestart', e=>e.preventDefault());
-document.addEventListener('dblclick', e=>e.preventDefault());
 </script>
-
 </body>
 </html>
