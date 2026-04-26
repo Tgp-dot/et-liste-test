@@ -423,6 +423,7 @@
 // ═══════════════════════════════
 let stream=null, worker=null, ocrBusy=false;
 let flashTimeout=null;
+let scanningPaused=false; // true after freeze — prevents re-freeze on resume until new scan completes
 let qty=1, currentNr='', currentName='';
 let autoscanActive=false;
 let log=[], offline=[], cfg={}, camPrefs={};
@@ -815,6 +816,7 @@ async function runOCR(updateDebug){
   const video=document.getElementById('video');
   if(!video.videoWidth||video.videoWidth===0){dbg('runOCR: videoWidth=0, skip');return;}
   ocrBusy=true;
+  scanningPaused=false; // new scan started — allow freeze again on next match
   dbg('runOCR: grabROI...');
 
   const canvas=document.getElementById('canvas-main');
@@ -863,12 +865,11 @@ async function runOCR(updateDebug){
   // Handle freeze/haptic outside try-catch so errors above don't block them
   ocrBusy=false;
   try{
-    const result2=extractNr(document.getElementById('raw-text').textContent||'');
-    // Re-read current displayed nr to decide freeze
-    if(currentNr){
+    if(currentNr && !scanningPaused){
       const match=matchArticle(currentNr);
       if(match&&match.exact){
         dbg('post-OCR: exact match confirmed, freezing');
+        scanningPaused=true;
         flashFrame(true);
         haptic();
         freezeCamera();
@@ -1004,11 +1005,14 @@ async function submitOrder(){
     status.textContent='Wird übertragen...';
     try{
       await fetch(cfg.flowUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(entry),mode:'no-cors'});
-      logEntry.synced=true;showToast('✓ Erfolgreich in Excel eingetragen');status.textContent='';
+      logEntry.synced=true;showToast('✓ Eingetragen — Kamera wird fortgesetzt');status.textContent='';
     }catch(e){offline.push(entry);saveOffline();showToast('Offline gespeichert');status.textContent='⚠ Offline';updateOfflineBadge();}
-  }else{offline.push(entry);saveOffline();showToast('Lokal gespeichert');status.textContent='Lokal';updateOfflineBadge();}
+  }else{offline.push(entry);saveOffline();showToast('Lokal gespeichert — Kamera wird fortgesetzt');status.textContent='Lokal';updateOfflineBadge();}
   log.unshift(logEntry);localStorage.setItem('et_log',JSON.stringify(log.slice(0,500)));
-  btn.disabled=false;setNr('');qty=1;document.getElementById('qty-val').textContent='1';
+  btn.disabled=false;
+  qty=1;document.getElementById('qty-val').textContent='1';
+  // Resume camera after submit (result stays visible)
+  startCamera();
 }
 function saveOffline(){localStorage.setItem('et_offline',JSON.stringify(offline));}
 function updateOfflineBadge(){const n=offline.length;['offline-badge','sync-badge'].forEach(id=>{const el=document.getElementById(id);if(!el)return;el.textContent=n+' offline';el.style.display=n?'inline-flex':'none';});}
