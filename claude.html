@@ -846,9 +846,8 @@ async function runOCR(updateDebug){
 }
 
 function freezeCamera(){
-  // Stop autoscan loop
   autoscanActive=false;
-  // Capture last frame onto a visible canvas before killing stream
+  console.log('[freeze] called, stream=', !!stream);
   const video=document.getElementById('video');
   const wrap=document.getElementById('video-wrap');
   if(video.videoWidth>0){
@@ -856,17 +855,19 @@ function freezeCamera(){
     if(!fc){
       fc=document.createElement('canvas');
       fc.id='freeze-canvas';
-      fc.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit;z-index:2;';
+      // z-index:10 to sit above scan-frame (z-index default)
+      fc.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit;z-index:10;';
       wrap.appendChild(fc);
     }
     fc.width=video.videoWidth; fc.height=video.videoHeight;
     fc.getContext('2d').drawImage(video,0,0);
     fc.style.display='block';
+    console.log('[freeze] canvas drawn', fc.width, 'x', fc.height);
+  } else {
+    console.warn('[freeze] videoWidth=0, no frame captured');
   }
-  // Stop stream
   if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
   video.srcObject=null;
-  // Update buttons: show "resume" button, hide stop/scan buttons
   const sb=document.getElementById('start-btn');
   sb.textContent='▶ Kamera fortsetzen'; sb.style.display='block';
   document.getElementById('autoscan-btn').style.display='none';
