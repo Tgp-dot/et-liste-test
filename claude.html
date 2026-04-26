@@ -277,6 +277,15 @@
           <div class="raw-text" id="raw-text">—</div>
         </div>
 
+        <!-- In-app debug log — remove after debugging -->
+        <div class="raw-box" id="dbg-box" style="display:none">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+            <div class="raw-label" style="margin:0">Debug Log</div>
+            <span onclick="document.getElementById('dbg-log').textContent=''" style="font-size:11px;color:var(--accent);cursor:pointer">leeren</span>
+          </div>
+          <div class="raw-text" id="dbg-log" style="white-space:pre-wrap;line-height:1.6;font-size:11px">—</div>
+        </div>
+
         <div id="manual-wrap" style="display:none;margin-bottom:8px">
           <input class="text-input" id="manual-input" type="text" placeholder="000-000.000-000" autocapitalize="none" autocorrect="off" onkeydown="if(event.key==='Enter')applyManual()"/>
           <button class="btn btn-outline btn-sm" onclick="applyManual()">Übernehmen</button>
@@ -371,6 +380,7 @@
         <div class="toggle-row"><span>Autoscan (läuft automatisch, Buttons ausgeblendet)</span><label class="toggle"><input type="checkbox" id="tog-autoscan" checked onchange="applyAutoscanSetting()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>Debug-Vorschau (verarbeitetes Bild)</span><label class="toggle"><input type="checkbox" id="tog-debug" onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>OCR Rohtext anzeigen</span><label class="toggle"><input type="checkbox" id="tog-rawtext" onchange="toggleRawBox()"><span class="tslider"></span></label></div>
+        <div class="toggle-row"><span>Debug Log anzeigen</span><label class="toggle"><input type="checkbox" id="tog-dbglog" onchange="toggleDbgBox()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>Adaptive Binarisierung (Sauvola)</span><label class="toggle"><input type="checkbox" id="tog-thresh" checked onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>Schärfung (Unsharp Mask)</span><label class="toggle"><input type="checkbox" id="tog-sharp" checked onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
       </div>
@@ -490,6 +500,19 @@ function updateConnBar(){
   if(cfg.flowUrl){bar.className='conn-bar conn-ok';document.getElementById('conn-icon').textContent='✓';document.getElementById('conn-text').textContent='Power Automate verbunden';}
   else{bar.className='conn-bar conn-warn';document.getElementById('conn-icon').textContent='⚠';document.getElementById('conn-text').textContent='Flow-URL fehlt — Offline-Modus';}
 }
+function toggleDbgBox(){
+  const show=document.getElementById('tog-dbglog').checked;
+  document.getElementById('dbg-box').style.display=show?'block':'none';
+}
+const _dbgLines=[];
+function dbg(msg){
+  const t=new Date().toLocaleTimeString('de-AT',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  _dbgLines.unshift('['+t+'] '+msg);
+  if(_dbgLines.length>30) _dbgLines.pop();
+  const el=document.getElementById('dbg-log');
+  if(el) el.textContent=_dbgLines.join('\n');
+}
+
 function toggleRawBox(){
   const show=document.getElementById('tog-rawtext').checked;
   document.getElementById('raw-box').style.display=show?'block':'none';
@@ -576,38 +599,32 @@ function applyAutoscanSetting(){
 //  CAMERA
 // ═══════════════════════════════
 async function startCamera(){
-  initHaptic(); // must run inside user gesture for iOS
+  initHaptic();
+  dbg('startCamera: getUserMedia...');
   try{
     stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
     const video=document.getElementById('video');
     video.srcObject=stream;
-
-    // Wait until video is actually playing before starting OCR
     await new Promise(resolve=>{
       video.oncanplay=()=>resolve();
-      // fallback if oncanplay already fired
       if(video.readyState>=3) resolve();
     });
-
+    dbg('camera ready, videoWidth='+video.videoWidth);
     positionFrame();
     const z=camPrefs.zoom||1;
     document.getElementById('zoom-slider').value=z;
     applyZoom(z);
-
     document.getElementById('start-btn').textContent='Kamera starten';
     document.getElementById('start-btn').style.display='none';
     document.getElementById('stop-btn').style.display='block';
-
-    // Hide freeze canvas if present
     const fc=document.getElementById('freeze-canvas');
     if(fc) fc.style.display='none';
-
     const autoOn=document.getElementById('tog-autoscan').checked;
     document.getElementById('autoscan-btn').style.display=autoOn?'none':'block';
     document.getElementById('snap-btn').style.display=autoOn?'none':'block';
+    dbg('autoscan setting: '+autoOn);
     if(autoOn) startAutoscan();
-
-  }catch(e){showToast('Kamera nicht verfügbar');toggleManual();}
+  }catch(e){dbg('ERROR startCamera: '+e.message);showToast('Kamera nicht verfügbar');toggleManual();}
 }
 function stopCamera(){
   stopAutoscan();
@@ -795,8 +812,9 @@ function haptic(){
 async function runOCR(updateDebug){
   if(ocrBusy||!stream) return;
   const video=document.getElementById('video');
-  if(!video.videoWidth||video.videoWidth===0) return; // video not ready yet
+  if(!video.videoWidth||video.videoWidth===0){dbg('runOCR: videoWidth=0, skip');return;}
   ocrBusy=true;
+  dbg('runOCR: grabROI...');
 
   const canvas=document.getElementById('canvas-main');
   grabROI(canvas);
@@ -811,7 +829,9 @@ async function runOCR(updateDebug){
 
   try{
     if(!worker){
+      dbg('loading Tesseract worker...');
       worker=await Tesseract.createWorker('eng',1,{logger:()=>{}});
+      dbg('Tesseract ready');
     }
     await worker.setParameters({
       tessedit_char_whitelist:'0123456789.-OoIlBbSsGgZzTtQqUu ',
@@ -819,35 +839,35 @@ async function runOCR(updateDebug){
     });
     const{data:{text}}=await worker.recognize(canvas);
     const raw=text.trim().replace(/\s+/g,' ');
+    dbg('OCR raw: "'+raw+'"');
 
     if(document.getElementById('tog-rawtext').checked)
       document.getElementById('raw-text').textContent=raw||'(leer)';
 
     const result=extractNr(raw);
+    dbg('extractNr: '+(result?result.nr+' ('+result.conf+')':'null'));
+
     if(result){
-      // Match against article list
       const match=matchArticle(result.nr);
+      dbg('matchArticle: '+(match?match.nr+' exact='+match.exact:'null'));
       if(match){
-        // Confirmed match — freeze camera, show result
         setNr(match.nr, match.name, match.exact?'✓ In Liste gefunden':'~ Ähnlicher Artikel — bitte prüfen', match.exact?'conf-high':'conf-med');
         flashFrame(true);
         haptic();
-        if(match.exact) freezeCamera();
+        if(match.exact){dbg('freezeCamera...');freezeCamera();}
         else if(autoscanActive) stopAutoscan();
       } else {
-        // OCR result not in list
         const confText=result.conf==='high'?'⚠ Nicht in Artikelliste':result.conf==='medium'?'⚠ Ähnlich, aber nicht in Liste':'⚠ Niedrige Sicherheit';
         setNr(result.nr,'',confText,'conf-low');
-        // no haptic on low-confidence result
       }
     }
-  }catch(e){console.warn('OCR error',e);}
+  }catch(e){dbg('ERROR runOCR: '+e.message);}
   ocrBusy=false;
 }
 
 function freezeCamera(){
   autoscanActive=false;
-  console.log('[freeze] called, stream=', !!stream);
+  dbg('freezeCamera: videoWidth='+document.getElementById('video').videoWidth);
   const video=document.getElementById('video');
   const wrap=document.getElementById('video-wrap');
   if(video.videoWidth>0){
@@ -862,9 +882,9 @@ function freezeCamera(){
     fc.width=video.videoWidth; fc.height=video.videoHeight;
     fc.getContext('2d').drawImage(video,0,0);
     fc.style.display='block';
-    console.log('[freeze] canvas drawn', fc.width, 'x', fc.height);
+    dbg('freezeCamera: frame captured '+fc.width+'x'+fc.height);
   } else {
-    console.warn('[freeze] videoWidth=0, no frame captured');
+    dbg('freezeCamera: videoWidth=0, no frame');
   }
   if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
   video.srcObject=null;
