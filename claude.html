@@ -602,6 +602,7 @@ function applyAutoscanSetting(){
 // ═══════════════════════════════
 async function startCamera(){
   initHaptic();
+  clearResult();
   dbg('startCamera: getUserMedia...');
   try{
     stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
@@ -995,6 +996,17 @@ function endQtyEdit(){const i=document.getElementById('qty-input'),v=document.ge
 // ═══════════════════════════════
 //  SUBMIT
 // ═══════════════════════════════
+// Resets scan result so autoscan doesn't immediately re-freeze on resume
+function clearResult(){
+  currentNr=''; currentName='';
+  const el=document.getElementById('result-nr');
+  el.innerHTML='<span class="result-hint-text">— noch nicht gescannt —</span>';
+  document.getElementById('result-conf').textContent='';
+  document.getElementById('result-conf').className='result-conf';
+  document.getElementById('match-box').classList.remove('visible');
+  document.getElementById('submit-status').textContent='';
+}
+
 async function submitOrder(){
   if(!currentNr){showToast('Bitte zuerst Bestellnummer scannen oder eingeben');return;}
   const btn=document.getElementById('submit-btn'),status=document.getElementById('submit-status');
@@ -1011,7 +1023,7 @@ async function submitOrder(){
   log.unshift(logEntry);localStorage.setItem('et_log',JSON.stringify(log.slice(0,500)));
   btn.disabled=false;
   qty=1;document.getElementById('qty-val').textContent='1';
-  // Resume camera after submit (result stays visible)
+  clearResult();
   startCamera();
 }
 function saveOffline(){localStorage.setItem('et_offline',JSON.stringify(offline));}
