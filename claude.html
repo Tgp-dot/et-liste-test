@@ -96,12 +96,16 @@
     #zoom-slider { flex: 1; accent-color: var(--accent); }
     .zoom-val { font-size: 12px; font-weight: 600; color: var(--text); min-width: 34px; text-align: right; }
 
-    /* ── Autoscan status bar ── */
-    #autoscan-bar { display: none; align-items: center; gap: 8px; margin-bottom: 8px; padding: 6px 10px; background: var(--bg); border-radius: var(--radius); border: 0.5px solid var(--border-med); }
-    #autoscan-bar.visible { display: flex; }
-    #autoscan-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1s ease-in-out infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-    #autoscan-label { font-size: 12px; color: var(--text-sec); flex: 1; }
+    /* ── Autoscan dot overlay in camera corner ── */
+    #autoscan-dot {
+      display: none; position: absolute; bottom: 10px; left: 10px;
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--accent); z-index: 5;
+      animation: pulse 1s ease-in-out infinite;
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.6);
+    }
+    #autoscan-dot.visible { display: block; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.25} }
 
     /* ── Buttons ── */
     .btn { display: block; width: 100%; padding: 12px; border: none; border-radius: var(--radius); font-size: 15px; font-weight: 600; cursor: pointer; text-align: center; margin-bottom: 8px; -webkit-tap-highlight-color: transparent; touch-action: manipulation; user-select: none; transition: all 0.1s; }
@@ -193,7 +197,7 @@
     .match-nr { font-size: 13px; color: var(--text-sec); font-family: 'Courier New', monospace; }
     .match-name { font-size: 16px; font-weight: 600; color: var(--success); margin-top: 2px; }
 
-    .toast { position: fixed; bottom: max(env(safe-area-inset-bottom),20px); left: 50%; transform: translateX(-50%) translateY(80px); background: rgba(32,31,30,0.92); color: white; padding: 11px 20px; border-radius: 20px; font-size: 14px; font-weight: 500; transition: transform 0.25s cubic-bezier(.34,1.56,.64,1); z-index: 9999; pointer-events: none; backdrop-filter: blur(8px); max-width: 88vw; text-align: center; }
+    .toast { position: fixed; bottom: max(env(safe-area-inset-bottom),20px); left: 50%; transform: translateX(-50%) translateY(200px); background: rgba(32,31,30,0.92); color: white; padding: 11px 20px; border-radius: 20px; font-size: 14px; font-weight: 500; transition: transform 0.25s cubic-bezier(.34,1.56,.64,1); z-index: 9999; pointer-events: none; backdrop-filter: blur(8px); max-width: 88vw; text-align: center; }
     .toast.show { transform: translateX(-50%) translateY(0); }
   </style>
 </head>
@@ -229,6 +233,7 @@
           <video id="video" autoplay playsinline muted></video>
           <canvas id="canvas-main"></canvas>
           <div id="scan-frame"></div>
+          <div id="autoscan-dot"></div>
         </div>
 
         <div id="debug-wrap">
@@ -240,11 +245,6 @@
           <span class="zoom-label">Zoom</span>
           <input type="range" id="zoom-slider" min="1" max="8" step="0.1" value="1" oninput="applyZoom(this.value)"/>
           <span class="zoom-val" id="zoom-val">1.0×</span>
-        </div>
-
-        <div id="autoscan-bar">
-          <div id="autoscan-dot"></div>
-          <span id="autoscan-label">Autoscan aktiv — scannt kontinuierlich</span>
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
@@ -496,6 +496,19 @@ function showTab(t){
   ['scan','log','setup'].forEach(n=>document.getElementById('tab-'+n).classList.toggle('active',n===t));
   document.querySelectorAll('.tab').forEach((b,i)=>b.classList.toggle('active',['scan','log','setup'][i]===t));
   if(t==='log') renderLog();
+  // Pause camera when leaving scan tab, resume when returning
+  if(t!=='scan' && stream){
+    stopAutoscan();
+    if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+    document.getElementById('video').srcObject=null;
+    document.getElementById('start-btn').textContent='Kamera starten';
+    document.getElementById('start-btn').style.display='block';
+    document.getElementById('stop-btn').style.display='none';
+    document.getElementById('autoscan-btn').style.display='none';
+    document.getElementById('snap-btn').style.display='none';
+    document.getElementById('autoscan-dot').classList.remove('visible');
+    dbg('tab change: camera stopped');
+  }
 }
 function updateConnBar(){
   const bar=document.getElementById('conn-bar');
@@ -791,22 +804,27 @@ function extractNr(raw){
 // ═══════════════════════════════
 //  HAPTIK
 // ═══════════════════════════════
-// ── Haptic feedback via input[type=switch] (Safari 18+ / iOS 18+) ──
-// Must be initialised inside a user gesture (e.g. camera start button tap).
+// input[type=switch] triggers native Taptic Engine in Safari 18+ / iOS 18+.
+// Element must be visible (not display:none, not opacity:0) and in the DOM.
+// opacity:0.01 + tiny size keeps it invisible while still "existing" for Safari.
 let _hapticInput = null;
 function initHaptic(){
   if(_hapticInput) return;
   try{
     const el = document.createElement('input');
-    el.type = 'switch'; // Safari 18+ only — silently ignored elsewhere
-    el.style.cssText = 'position:fixed;opacity:0;pointer-events:none;width:0;height:0;';
+    el.type = 'switch';
+    el.style.cssText = 'position:fixed;top:-1px;left:-1px;width:1px;height:1px;opacity:0.01;pointer-events:none;';
     document.body.appendChild(el);
     _hapticInput = el;
-  }catch(e){}
+    dbg('haptic: input[type='+el.type+'] created');
+  }catch(e){ dbg('haptic init error: '+e); }
 }
 function haptic(){
   if(!_hapticInput) return;
-  try{ _hapticInput.checked = !_hapticInput.checked; }catch(e){}
+  try{
+    _hapticInput.checked = !_hapticInput.checked;
+    _hapticInput.dispatchEvent(new Event('change',{bubbles:true}));
+  }catch(e){}
 }
 
 // ═══════════════════════════════
@@ -855,16 +873,14 @@ async function runOCR(updateDebug){
       dbg('matchArticle: '+(match?match.nr+' exact='+match.exact:'null'));
       if(match){
         setNr(match.nr, match.name, match.exact?'✓ In Liste gefunden':'~ Ähnlicher Artikel — bitte prüfen', match.exact?'conf-high':'conf-med');
-        if(match.exact && !scanningPaused){
-          dbg('exact match → freeze');
+        if(!scanningPaused){
+          dbg((match.exact?'exact':'fuzzy')+' match → freeze');
           scanningPaused=true;
           flashFrame(true);
           haptic();
           ocrBusy=false;
           freezeCamera();
-          return; // exit runOCR — ocrBusy already reset above
-        } else if(!match.exact && autoscanActive){
-          stopAutoscan();
+          return;
         }
       } else {
         const confText=result.conf==='high'?'⚠ Nicht in Artikelliste':result.conf==='medium'?'⚠ Ähnlich, aber nicht in Liste':'⚠ Niedrige Sicherheit';
@@ -903,7 +919,7 @@ function freezeCamera(){
   document.getElementById('autoscan-btn').style.display='none';
   document.getElementById('snap-btn').style.display='none';
   document.getElementById('stop-btn').style.display='none';
-  document.getElementById('autoscan-bar').classList.remove('visible');
+  document.getElementById('autoscan-dot').classList.remove('visible');
   document.getElementById('autoscan-btn').textContent='▶ Autoscan';
   document.getElementById('autoscan-btn').classList.remove('on');
 }
@@ -929,7 +945,7 @@ function startAutoscan(){
   autoscanActive=true;
   document.getElementById('autoscan-btn').textContent='⏹ Stopp';
   document.getElementById('autoscan-btn').classList.add('on');
-  document.getElementById('autoscan-bar').classList.add('visible');
+  document.getElementById('autoscan-dot').classList.add('visible');
   loopAutoscan();
 }
 
@@ -945,7 +961,7 @@ function stopAutoscan(){
   autoscanActive=false;
   document.getElementById('autoscan-btn').textContent='▶ Autoscan';
   document.getElementById('autoscan-btn').classList.remove('on');
-  document.getElementById('autoscan-bar').classList.remove('visible');
+  document.getElementById('autoscan-dot').classList.remove('visible');
 }
 
 // ═══════════════════════════════
