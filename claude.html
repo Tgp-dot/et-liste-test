@@ -368,12 +368,10 @@
       <!-- Bildverarbeitung -->
       <div class="card">
         <div class="card-title">Bildverarbeitung</div>
-        <div class="toggle-row"><span>Autoscan beim Kamerastart automatisch starten</span><label class="toggle"><input type="checkbox" id="tog-autoscan" checked onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
-        <div class="toggle-row"><span>Scan-Buttons anzeigen (Autoscan / Einzelscan)</span><label class="toggle"><input type="checkbox" id="tog-scanbtns" onchange="applyScanBtnVisibility()"><span class="tslider"></span></label></div>
+        <div class="toggle-row"><span>Autoscan (läuft automatisch, Buttons ausgeblendet)</span><label class="toggle"><input type="checkbox" id="tog-autoscan" checked onchange="applyAutoscanSetting()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>Debug-Vorschau (verarbeitetes Bild)</span><label class="toggle"><input type="checkbox" id="tog-debug" onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>OCR Rohtext anzeigen</span><label class="toggle"><input type="checkbox" id="tog-rawtext" onchange="toggleRawBox()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>Adaptive Binarisierung (Sauvola)</span><label class="toggle"><input type="checkbox" id="tog-thresh" checked onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
-        <div class="toggle-row"><span>CLAHE Kontrastverstärkung</span><label class="toggle"><input type="checkbox" id="tog-clahe" onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>Schärfung (Unsharp Mask)</span><label class="toggle"><input type="checkbox" id="tog-sharp" checked onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
       </div>
 
@@ -429,10 +427,8 @@ document.getElementById('flow-url').value=cfg.flowUrl||'';
 document.getElementById('username').value=cfg.user||'';
 document.getElementById('tog-debug').checked=!!camPrefs.debug;
 document.getElementById('tog-autoscan').checked=camPrefs.autoscan!==false; // default ON
-document.getElementById('tog-scanbtns').checked=!!camPrefs.scanbtns;         // default OFF
-document.getElementById('tog-rawtext').checked=!!camPrefs.rawtext; // default OFF
+document.getElementById('tog-rawtext').checked=!!camPrefs.rawtext;           // default OFF
 document.getElementById('tog-thresh').checked=camPrefs.thresh!==false;
-document.getElementById('tog-clahe').checked=!!camPrefs.clahe; // default OFF
 document.getElementById('tog-sharp').checked=camPrefs.sharp!==false;
 
 // Camera/frame settings
@@ -579,7 +575,7 @@ function positionFrame(){
   const frame=document.getElementById('scan-frame');
   if(!wrap||!frame)return;
   const W=wrap.offsetWidth, H=wrap.offsetHeight;
-  const fW=(camPrefs.frameW||67)/100, fH=(camPrefs.frameH||67)/100;
+  const fW=(camPrefs.frameW||80)/100, fH=(camPrefs.frameH||33)/100;
   const fw=W*fW, fh=H*fH;
   frame.style.left=((W-fw)/2)+'px';
   frame.style.top=((H-fh)/2)+'px';
@@ -589,14 +585,20 @@ function positionFrame(){
 window.addEventListener('resize', positionFrame);
 
 // ═══════════════════════════════
-//  SCAN BUTTON VISIBILITY
+//  AUTOSCAN SETTING
 // ═══════════════════════════════
-function applyScanBtnVisibility(){
-  const show = document.getElementById('tog-scanbtns').checked;
-  const cameraOn = !!stream;
-  document.getElementById('autoscan-btn').style.display = (show && cameraOn) ? 'block' : 'none';
-  document.getElementById('snap-btn').style.display     = (show && cameraOn) ? 'block' : 'none';
+function applyAutoscanSetting(){
   saveCamPrefs();
+  const autoOn = document.getElementById('tog-autoscan').checked;
+  const cameraOn = !!stream;
+  // Hide/show manual buttons based on setting
+  document.getElementById('autoscan-btn').style.display = (!autoOn && cameraOn) ? 'block' : 'none';
+  document.getElementById('snap-btn').style.display     = (!autoOn && cameraOn) ? 'block' : 'none';
+  // Start/stop autoscan if camera is already running
+  if(cameraOn){
+    if(autoOn && !autoscanActive) startAutoscan();
+    if(!autoOn && autoscanActive) stopAutoscan();
+  }
 }
 
 // ═══════════════════════════════
@@ -615,10 +617,12 @@ async function startCamera(){
       applyZoom(z);
     };
     document.getElementById('start-btn').style.display='none';
-    applyScanBtnVisibility();
     document.getElementById('stop-btn').style.display='block';
-    // auto-start autoscan if setting is on
-    if(document.getElementById('tog-autoscan').checked) startAutoscan();
+    const autoOn = document.getElementById('tog-autoscan').checked;
+    // Only show manual buttons when autoscan setting is OFF
+    document.getElementById('autoscan-btn').style.display = autoOn ? 'none' : 'block';
+    document.getElementById('snap-btn').style.display     = autoOn ? 'none' : 'block';
+    if(autoOn) startAutoscan();
   }catch(e){showToast('Kamera nicht verfügbar');toggleManual();}
 }
 function stopCamera(){
@@ -703,23 +707,6 @@ function preprocess(canvas){
 
   // Grayscale
   for(let i=0;i<d.length;i+=4){const g=Math.round(0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]);d[i]=d[i+1]=d[i+2]=g;}
-
-  // CLAHE
-  if(document.getElementById('tog-clahe').checked){
-    const gray=new Uint8Array(W*H);for(let i=0;i<W*H;i++)gray[i]=d[i*4];
-    const T=8,tw=Math.ceil(W/T),th=Math.ceil(H/T),out=new Uint8Array(W*H);
-    for(let ty=0;ty<T;ty++)for(let tx=0;tx<T;tx++){
-      const x0=tx*tw,y0=ty*th,x1=Math.min(x0+tw,W),y1=Math.min(y0+th,H);
-      const hist=new Int32Array(256);for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++)hist[gray[y*W+x]]++;
-      const total=(x1-x0)*(y1-y0),clip=Math.max(1,Math.round(4*total/256));
-      let ex=0;for(let v=0;v<256;v++){if(hist[v]>clip){ex+=hist[v]-clip;hist[v]=clip;}}
-      const add=Math.floor(ex/256);for(let v=0;v<256;v++)hist[v]+=add;
-      const cdf=new Int32Array(256);cdf[0]=hist[0];for(let v=1;v<256;v++)cdf[v]=cdf[v-1]+hist[v];
-      const cMin=cdf.find(v=>v>0)||1;
-      for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){const idx=y*W+x;out[idx]=Math.round((cdf[gray[idx]]-cMin)/(total-cMin)*255);}
-    }
-    for(let i=0;i<W*H;i++)d[i*4]=d[i*4+1]=d[i*4+2]=out[i];
-  }
 
   // Gaussian blur
   {const s=new Uint8Array(W*H);for(let i=0;i<W*H;i++)s[i]=d[i*4];const b=new Uint8Array(W*H);
@@ -1018,10 +1005,8 @@ async function saveAndTest(){
 function saveCamPrefs(){
   camPrefs.debug=document.getElementById('tog-debug').checked;
   camPrefs.autoscan=document.getElementById('tog-autoscan').checked;
-  camPrefs.scanbtns=document.getElementById('tog-scanbtns').checked;
   camPrefs.rawtext=document.getElementById('tog-rawtext').checked;
   camPrefs.thresh=document.getElementById('tog-thresh').checked;
-  camPrefs.clahe=document.getElementById('tog-clahe').checked;
   camPrefs.sharp=document.getElementById('tog-sharp').checked;
   localStorage.setItem('et_cam',JSON.stringify(camPrefs));
 }
