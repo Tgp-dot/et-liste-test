@@ -413,7 +413,7 @@
 // ═══════════════════════════════
 let stream=null, worker=null, ocrBusy=false;
 let qty=1, currentNr='', currentName='';
-let autoscanActive=false, autoscanTimer=null;
+let autoscanActive=false;
 let log=[], offline=[], cfg={}, camPrefs={};
 let articleMap = {}; // nr -> name
 
@@ -584,6 +584,7 @@ window.addEventListener('resize', positionFrame);
 //  CAMERA
 // ═══════════════════════════════
 async function startCamera(){
+  initHaptic(); // must run inside user gesture for iOS
   try{
     stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
     const video=document.getElementById('video');
@@ -777,10 +778,22 @@ function extractNr(raw){
 // ═══════════════════════════════
 //  HAPTIK
 // ═══════════════════════════════
-function haptic(type){
-  if(!window.navigator||!window.navigator.vibrate) return;
-  if(type==='success') navigator.vibrate([30,20,30]);
-  else if(type==='soft') navigator.vibrate(15);
+// ── Haptic feedback via input[type=switch] (Safari 18+ / iOS 18+) ──
+// Must be initialised inside a user gesture (e.g. camera start button tap).
+let _hapticInput = null;
+function initHaptic(){
+  if(_hapticInput) return;
+  try{
+    const el = document.createElement('input');
+    el.type = 'switch'; // Safari 18+ only — silently ignored elsewhere
+    el.style.cssText = 'position:fixed;opacity:0;pointer-events:none;width:0;height:0;';
+    document.body.appendChild(el);
+    _hapticInput = el;
+  }catch(e){}
+}
+function haptic(){
+  if(!_hapticInput) return;
+  try{ _hapticInput.checked = !_hapticInput.checked; }catch(e){}
 }
 
 // ═══════════════════════════════
@@ -823,13 +836,13 @@ async function runOCR(updateDebug){
         // Confirmed match
         setNr(match.nr, match.name, match.exact?'✓ In Liste gefunden':'~ Ähnlicher Artikel — bitte prüfen', match.exact?'conf-high':'conf-med');
         flashFrame(true);
-        haptic('success');
+        haptic();
         if(autoscanActive&&match.exact) stopAutoscan();
       } else {
         // OCR result not in list
         const confText=result.conf==='high'?'⚠ Nicht in Artikelliste':result.conf==='medium'?'⚠ Ähnlich, aber nicht in Liste':'⚠ Niedrige Sicherheit';
         setNr(result.nr,'',confText,'conf-low');
-        haptic('soft');
+        // no haptic on low-confidence result
       }
     }
   }catch(e){console.warn('OCR error',e);}
@@ -864,14 +877,13 @@ function startAutoscan(){
 }
 
 async function loopAutoscan(){
-  if(!autoscanActive)return;
+  if(!autoscanActive) return;
   await runOCR(true);
-  if(autoscanActive) autoscanTimer=setTimeout(loopAutoscan,1000);
+  if(autoscanActive) loopAutoscan(); // no delay — next scan starts immediately after OCR finishes
 }
 
 function stopAutoscan(){
   autoscanActive=false;
-  clearTimeout(autoscanTimer);
   document.getElementById('autoscan-btn').textContent='▶ Autoscan';
   document.getElementById('autoscan-btn').classList.remove('on');
   document.getElementById('autoscan-bar').classList.remove('visible');
