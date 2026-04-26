@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Ersatzteile"/>
+<title>Ersatzteile Scanner</title>
+
+<style>
+/* DEIN CSS UNVERÄNDERT */
+</style>
+</head>
+
+<body>
+<div id="root">
+<!-- DEIN HTML KOMPLETT UNVERÄNDERT BIS AUF DIESE ÄNDERUNG: -->
+
+<!-- Bildverarbeitung -->
+<div class="card">
+  <div class="card-title">Bildverarbeitung</div>
+
+  <!-- NEU -->
+  <div class="toggle-row">
+    <span>Autoscan (immer aktiv)</span>
+    <label class="toggle">
+      <input type="checkbox" id="tog-autoscan" checked onchange="saveCamPrefs()">
+      <span class="tslider"></span>
+    </label>
+  </div>
+
+  <!-- BESTEHEND -->
+  <div class="toggle-row">
+    <span>Debug-Vorschau (verarbeitetes Bild)</span>
+    <label class="toggle"><input type="checkbox" id="tog-debug" onchange="saveCamPrefs()"><span class="tslider"></span></label>
+  </div>
+
+  <div class="toggle-row">
+    <span>OCR Rohtext anzeigen</span>
+    <label class="toggle"><input type="checkbox" id="tog-rawtext" onchange="toggleRawBox()"><span class="tslider"></span></label>
+  </div>
+
+  <div class="toggle-row">
+    <span>Adaptive Binarisierung (Sauvola)</span>
+    <label class="toggle"><input type="checkbox" id="tog-thresh" checked onchange="saveCamPrefs()"><span class="tslider"></span></label>
+  </div>
+
+  <div class="toggle-row">
+    <span>Schärfung (Unsharp Mask)</span>
+    <label class="toggle"><input type="checkbox" id="tog-sharp" checked onchange="saveCamPrefs()"><span class="tslider"></span></label>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+<script>
+
+// ───────── DEFAULTS ─────────
+if (!localStorage.getItem('et_cam')) {
+  localStorage.setItem('et_cam', JSON.stringify({
+    frameW:80,
+    frameH:33,
+    rawtext:false,
+    autoscan:true
+  }));
+}
+
+let camPrefs={};
+try{camPrefs=JSON.parse(localStorage.getItem('et_cam')||'{}');}catch(e){}
+
+// INIT UI
+document.getElementById('tog-autoscan').checked = camPrefs.autoscan !== false;
+document.getElementById('tog-rawtext').checked = camPrefs.rawtext === true;
+
+// ───────── SAVE PREFS ─────────
+function saveCamPrefs(){
+  camPrefs.debug=document.getElementById('tog-debug').checked;
+  camPrefs.rawtext=document.getElementById('tog-rawtext').checked;
+  camPrefs.thresh=document.getElementById('tog-thresh').checked;
+  camPrefs.sharp=document.getElementById('tog-sharp').checked;
+  camPrefs.autoscan=document.getElementById('tog-autoscan').checked;
+  localStorage.setItem('et_cam',JSON.stringify(camPrefs));
+}
+
+// ───────── CAMERA ─────────
+async function startCamera(){
+  initHaptic();
+
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'}}
+    });
+
+    const video=document.getElementById('video');
+    video.srcObject=stream;
+
+    document.getElementById('start-btn').style.display='none';
+    document.getElementById('stop-btn').style.display='block';
+
+    const auto=camPrefs.autoscan!==false;
+
+    if(auto){
+      document.getElementById('autoscan-btn').style.display='none';
+      document.getElementById('snap-btn').style.display='none';
+      startAutoscan();
+    }else{
+      document.getElementById('autoscan-btn').style.display='block';
+      document.getElementById('snap-btn').style.display='block';
+    }
+
+  }catch(e){
+    showToast('Kamera nicht verfügbar');
+  }
+}
+
+function stopCamera(){
+  stopAutoscan();
+  if(stream){
+    stream.getTracks().forEach(t=>t.stop());
+    stream=null;
+  }
+  document.getElementById('video').srcObject=null;
+
+  document.getElementById('start-btn').style.display='block';
+  document.getElementById('stop-btn').style.display='none';
+}
+
+// ───────── OCR ─────────
+async function runOCR(){
+  if(!stream) return;
+
+  // ... DEIN ORIGINAL OCR CODE ...
+
+  if(match && match.exact){
+    stopAutoscan();
+    stopCamera(); // WICHTIG
+  }
+}
+
+// ───────── AUTOSCAN ─────────
+function startAutoscan(){
+  autoscanActive=true;
+  loopAutoscan();
+}
+
+function stopAutoscan(){
+  autoscanActive=false;
+}
+
+async function loopAutoscan(){
+  if(!autoscanActive) return;
+  await runOCR();
+  if(autoscanActive) loopAutoscan();
+}
+
+</script>
+</body>
+</html>
