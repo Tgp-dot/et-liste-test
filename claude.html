@@ -354,12 +354,12 @@
         </div>
         <div class="setting-row">
           <span class="setting-label">Rahmen Breite (% der Kamera)</span>
-          <input class="setting-input" id="frame-w-pct" type="number" min="20" max="100" step="1" value="67" placeholder="67"/>
+          <input class="setting-input" id="frame-w-pct" type="number" min="20" max="100" step="1" value="80" placeholder="80"/>
           <span style="font-size:13px;color:var(--text-ter)">%</span>
         </div>
         <div class="setting-row">
           <span class="setting-label">Rahmen Höhe (% der Kamera)</span>
-          <input class="setting-input" id="frame-h-pct" type="number" min="20" max="100" step="1" value="67" placeholder="67"/>
+          <input class="setting-input" id="frame-h-pct" type="number" min="20" max="100" step="1" value="33" placeholder="33"/>
           <span style="font-size:13px;color:var(--text-ter)">%</span>
         </div>
         <button class="btn btn-accent" style="margin-top:10px" onclick="applyFrameSettings()">Übernehmen</button>
@@ -368,8 +368,10 @@
       <!-- Bildverarbeitung -->
       <div class="card">
         <div class="card-title">Bildverarbeitung</div>
+        <div class="toggle-row"><span>Autoscan beim Kamerastart automatisch starten</span><label class="toggle"><input type="checkbox" id="tog-autoscan" checked onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
+        <div class="toggle-row"><span>Scan-Buttons anzeigen (Autoscan / Einzelscan)</span><label class="toggle"><input type="checkbox" id="tog-scanbtns" onchange="applyScanBtnVisibility()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>Debug-Vorschau (verarbeitetes Bild)</span><label class="toggle"><input type="checkbox" id="tog-debug" onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
-        <div class="toggle-row"><span>OCR Rohtext anzeigen</span><label class="toggle"><input type="checkbox" id="tog-rawtext" checked onchange="toggleRawBox()"><span class="tslider"></span></label></div>
+        <div class="toggle-row"><span>OCR Rohtext anzeigen</span><label class="toggle"><input type="checkbox" id="tog-rawtext" onchange="toggleRawBox()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>Adaptive Binarisierung (Sauvola)</span><label class="toggle"><input type="checkbox" id="tog-thresh" checked onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>CLAHE Kontrastverstärkung</span><label class="toggle"><input type="checkbox" id="tog-clahe" onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>Schärfung (Unsharp Mask)</span><label class="toggle"><input type="checkbox" id="tog-sharp" checked onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
@@ -426,14 +428,16 @@ try{camPrefs=JSON.parse(localStorage.getItem('et_cam')||'{}');}catch(e){}
 document.getElementById('flow-url').value=cfg.flowUrl||'';
 document.getElementById('username').value=cfg.user||'';
 document.getElementById('tog-debug').checked=!!camPrefs.debug;
-document.getElementById('tog-rawtext').checked=camPrefs.rawtext!==false;
+document.getElementById('tog-autoscan').checked=camPrefs.autoscan!==false; // default ON
+document.getElementById('tog-scanbtns').checked=!!camPrefs.scanbtns;         // default OFF
+document.getElementById('tog-rawtext').checked=!!camPrefs.rawtext; // default OFF
 document.getElementById('tog-thresh').checked=camPrefs.thresh!==false;
 document.getElementById('tog-clahe').checked=!!camPrefs.clahe; // default OFF
 document.getElementById('tog-sharp').checked=camPrefs.sharp!==false;
 
 // Camera/frame settings
 const savedRatioW = camPrefs.ratioW||2, savedRatioH = camPrefs.ratioH||1;
-const savedFW = camPrefs.frameW||67, savedFH = camPrefs.frameH||67;
+const savedFW = camPrefs.frameW||80, savedFH = camPrefs.frameH||33;
 document.getElementById('cam-ratio-w').value=savedRatioW;
 document.getElementById('cam-ratio-h').value=savedRatioH;
 document.getElementById('frame-w-pct').value=savedFW;
@@ -540,9 +544,13 @@ function loadLogo(input){
 }
 function applyLogoSrc(src){
   const el=document.getElementById('header-logo');
-  el.innerHTML=`<img src="${src}" alt="Logo"/>`;
+  el.innerHTML=''; // clear placeholder first
+  const img=document.createElement('img');
+  img.src=src; img.alt='Logo';
+  el.appendChild(img);
 }
 function clearLogo(){
+
   localStorage.removeItem('et_logo');
   document.getElementById('header-logo').innerHTML='<span class="header-logo-placeholder">🔧</span>';
   document.getElementById('logo-file').value='';
@@ -581,6 +589,17 @@ function positionFrame(){
 window.addEventListener('resize', positionFrame);
 
 // ═══════════════════════════════
+//  SCAN BUTTON VISIBILITY
+// ═══════════════════════════════
+function applyScanBtnVisibility(){
+  const show = document.getElementById('tog-scanbtns').checked;
+  const cameraOn = !!stream;
+  document.getElementById('autoscan-btn').style.display = (show && cameraOn) ? 'block' : 'none';
+  document.getElementById('snap-btn').style.display     = (show && cameraOn) ? 'block' : 'none';
+  saveCamPrefs();
+}
+
+// ═══════════════════════════════
 //  CAMERA
 // ═══════════════════════════════
 async function startCamera(){
@@ -596,9 +615,10 @@ async function startCamera(){
       applyZoom(z);
     };
     document.getElementById('start-btn').style.display='none';
-    document.getElementById('autoscan-btn').style.display='block';
-    document.getElementById('snap-btn').style.display='block';
+    applyScanBtnVisibility();
     document.getElementById('stop-btn').style.display='block';
+    // auto-start autoscan if setting is on
+    if(document.getElementById('tog-autoscan').checked) startAutoscan();
   }catch(e){showToast('Kamera nicht verfügbar');toggleManual();}
 }
 function stopCamera(){
@@ -610,7 +630,6 @@ function stopCamera(){
   document.getElementById('snap-btn').style.display='none';
   document.getElementById('stop-btn').style.display='none';
   document.getElementById('debug-wrap').classList.remove('visible');
-}
 
 // ═══════════════════════════════
 //  ZOOM
@@ -997,6 +1016,8 @@ async function saveAndTest(){
 }
 function saveCamPrefs(){
   camPrefs.debug=document.getElementById('tog-debug').checked;
+  camPrefs.autoscan=document.getElementById('tog-autoscan').checked;
+  camPrefs.scanbtns=document.getElementById('tog-scanbtns').checked;
   camPrefs.rawtext=document.getElementById('tog-rawtext').checked;
   camPrefs.thresh=document.getElementById('tog-thresh').checked;
   camPrefs.clahe=document.getElementById('tog-clahe').checked;
