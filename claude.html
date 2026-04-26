@@ -817,7 +817,6 @@ async function runOCR(updateDebug){
   const video=document.getElementById('video');
   if(!video.videoWidth||video.videoWidth===0){dbg('runOCR: videoWidth=0, skip');return;}
   ocrBusy=true;
-  scanningPaused=false; // new scan started — allow freeze again on next match
   dbg('runOCR: grabROI...');
 
   const canvas=document.getElementById('canvas-main');
@@ -856,29 +855,24 @@ async function runOCR(updateDebug){
       dbg('matchArticle: '+(match?match.nr+' exact='+match.exact:'null'));
       if(match){
         setNr(match.nr, match.name, match.exact?'✓ In Liste gefunden':'~ Ähnlicher Artikel — bitte prüfen', match.exact?'conf-high':'conf-med');
+        if(match.exact && !scanningPaused){
+          dbg('exact match → freeze');
+          scanningPaused=true;
+          flashFrame(true);
+          haptic();
+          ocrBusy=false;
+          freezeCamera();
+          return; // exit runOCR — ocrBusy already reset above
+        } else if(!match.exact && autoscanActive){
+          stopAutoscan();
+        }
       } else {
         const confText=result.conf==='high'?'⚠ Nicht in Artikelliste':result.conf==='medium'?'⚠ Ähnlich, aber nicht in Liste':'⚠ Niedrige Sicherheit';
         setNr(result.nr,'',confText,'conf-low');
       }
     }
   }catch(e){dbg('ERROR runOCR: '+e.message);}
-
-  // Handle freeze/haptic outside try-catch so errors above don't block them
   ocrBusy=false;
-  try{
-    if(currentNr && !scanningPaused){
-      const match=matchArticle(currentNr);
-      if(match&&match.exact){
-        dbg('post-OCR: exact match confirmed, freezing');
-        scanningPaused=true;
-        flashFrame(true);
-        haptic();
-        freezeCamera();
-      } else if(match&&!match.exact&&autoscanActive){
-        stopAutoscan();
-      }
-    }
-  }catch(e2){dbg('ERROR post-OCR: '+e2.message);}
 }
 
 function freezeCamera(){
@@ -999,6 +993,7 @@ function endQtyEdit(){const i=document.getElementById('qty-input'),v=document.ge
 // Resets scan result so autoscan doesn't immediately re-freeze on resume
 function clearResult(){
   currentNr=''; currentName='';
+  scanningPaused=false;
   const el=document.getElementById('result-nr');
   el.innerHTML='<span class="result-hint-text">— noch nicht gescannt —</span>';
   document.getElementById('result-conf').textContent='';
