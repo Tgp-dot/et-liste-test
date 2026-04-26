@@ -374,6 +374,31 @@
         <button class="btn btn-accent" style="margin-top:10px" onclick="applyFrameSettings()">Übernehmen</button>
       </div>
 
+      <!-- Scan-Parameter -->
+      <div class="card">
+        <div class="card-title">Scan-Parameter</div>
+        <div class="setting-row">
+          <span class="setting-label">Motion-Schwelle (0–50)</span>
+          <input class="setting-input" id="param-motion" type="number" min="0" max="50" step="1" value="15"/>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Kontrast-Minimum (0–50)</span>
+          <input class="setting-input" id="param-contrast" type="number" min="0" max="50" step="1" value="8"/>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Mindestpause nach OCR (ms)</span>
+          <input class="setting-input" id="param-pause" type="number" min="0" max="2000" step="50" value="150"/>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Prüf-Intervall wenn nicht stabil (ms)</span>
+          <input class="setting-input" id="param-check" type="number" min="10" max="500" step="10" value="30"/>
+        </div>
+        <button class="btn btn-accent" style="margin-top:10px" onclick="applyScanParams()">Übernehmen</button>
+        <div style="font-size:11px;color:var(--text-ter);margin-top:6px;line-height:1.6">
+          Motion: niedriger = empfindlicher (mehr Scans werden blockiert). Kontrast: niedriger = auch dunkle Etiketten. Mindestpause: Zeit zwischen zwei OCR-Läufen.
+        </div>
+      </div>
+
       <!-- Bildverarbeitung -->
       <div class="card">
         <div class="card-title">Bildverarbeitung</div>
@@ -998,8 +1023,8 @@ function checkFrameQuality(){
   }
   _prevFrameData=gray;
 
-  const stable = motion<6;       // px avg diff threshold — tune if needed
-  const hasContrast = contrast>12; // min contrast to attempt OCR
+  const stable = motion < (camPrefs.motionThresh??15);
+  const hasContrast = contrast > (camPrefs.contrastMin??8);
   return {stable, contrast, motion, hasContrast};
 }
 
@@ -1028,11 +1053,12 @@ async function loopAutoscan(){
     if(!ocrBusy && stream){
       const q=checkFrameQuality();
       if(q.stable && q.hasContrast){
-        dbg('frame stable (motion='+q.motion.toFixed(1)+' contrast='+q.contrast.toFixed(1)+') → OCR');
+        dbg('stable (m='+q.motion.toFixed(1)+' c='+q.contrast.toFixed(1)+') → OCR');
         await runOCR(true);
+        await new Promise(r=>setTimeout(r, camPrefs.pauseMs??150));
+      } else {
+        await new Promise(r=>setTimeout(r, camPrefs.checkMs??30));
       }
-      // short yield regardless — keeps UI responsive
-      await new Promise(r=>setTimeout(r,120));
     } else {
       await new Promise(r=>setTimeout(r,50));
     }
@@ -1167,6 +1193,16 @@ async function saveAndTest(){
   try{await fetch(cfg.flowUrl,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify({bestellnummer:'000-000.000-000',artikelname:'Test',menge:0,zeitstempel:new Date().toISOString(),benutzer:'Test'})});result.style.color='var(--success)';result.textContent='✓ Anfrage gesendet';}
   catch(e){result.style.color='var(--accent)';result.textContent='✗ Fehler — URL prüfen';}
 }
+function applyScanParams(){
+  const n = id => { const v=parseFloat(document.getElementById(id).value); return isNaN(v)?undefined:v; };
+  camPrefs.motionThresh = n('param-motion');
+  camPrefs.contrastMin  = n('param-contrast');
+  camPrefs.pauseMs      = n('param-pause');
+  camPrefs.checkMs      = n('param-check');
+  saveCamPrefs();
+  showToast('Scan-Parameter gespeichert');
+}
+
 function saveCamPrefs(){
   const g = id => { const el=document.getElementById(id); return el?el.checked:undefined; };
   if(g('tog-debug')!==undefined)   camPrefs.debug=g('tog-debug');
@@ -1205,6 +1241,12 @@ function init(){
   document.getElementById('frame-w-pct').value=fW;
   document.getElementById('frame-h-pct').value=fH;
   applyCamRatio(rW, rH);
+
+  // Scan parameters
+  document.getElementById('param-motion').value   = camPrefs.motionThresh??15;
+  document.getElementById('param-contrast').value = camPrefs.contrastMin??8;
+  document.getElementById('param-pause').value    = camPrefs.pauseMs??150;
+  document.getElementById('param-check').value    = camPrefs.checkMs??30;
 
   loadArticleList();
   toggleRawBox();
