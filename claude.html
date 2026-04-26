@@ -423,6 +423,8 @@
 // ═══════════════════════════════
 let stream=null, worker=null, ocrBusy=false;
 let flashTimeout=null;
+let _prevFrameData=null;   // for motion detection
+let _motionStable=false;   // true when frame is stable enough to scan
 let scanningPaused=false; // true after freeze — prevents re-freeze on resume until new scan completes
 let qty=1, currentNr='', currentName='';
 let autoscanActive=false;
@@ -638,6 +640,7 @@ async function startCamera(){
     const autoOn=document.getElementById('tog-autoscan').checked;
     document.getElementById('autoscan-btn').style.display=autoOn?'none':'block';
     document.getElementById('snap-btn').style.display=autoOn?'none':'block';
+    _prevFrameData=null; // reset motion baseline
     dbg('autoscan setting: '+autoOn);
     if(autoOn) startAutoscan();
   }catch(e){dbg('ERROR startCamera: '+e.message);showToast('Kamera nicht verfügbar');toggleManual();}
@@ -706,9 +709,12 @@ function grabROI(targetCanvas){
   const cropW=Math.min(vW-cropX,Math.round((uR-uL)*scX));
   const cropH=Math.min(vH-cropY,Math.round((uB-uT)*scY));
 
-  const SCALE=3;
-  targetCanvas.width=cropW*SCALE;
-  targetCanvas.height=cropH*SCALE;
+  // Dynamic downscaling: target ~1200px wide for optimal Tesseract accuracy
+  // (more doesn't help, less hurts for small text)
+  const TARGET_W = 1200;
+  const SCALE = Math.max(1, Math.min(4, TARGET_W / cropW));
+  targetCanvas.width  = Math.round(cropW * SCALE);
+  targetCanvas.height = Math.round(cropH * SCALE);
   const ctx=targetCanvas.getContext('2d');
   ctx.imageSmoothingEnabled=true;
   ctx.imageSmoothingQuality='high';
@@ -852,14 +858,17 @@ async function runOCR(updateDebug){
     if(!worker){
       dbg('loading Tesseract worker...');
       worker=await Tesseract.createWorker('eng',1,{logger:()=>{}});
-      dbg('Tesseract ready');
+      // Set parameters ONCE — not per frame
+      await worker.setParameters({
+        tessedit_char_whitelist:'0123456789.-', // digits + separators only
+        tessedit_pageseg_mode:'7',              // single text line
+        tessedit_ocr_engine_mode:'2',           // LSTM only — faster, better for structured text
+      });
+      dbg('Tesseract ready (LSTM-only)');
     }
-    await worker.setParameters({
-      tessedit_char_whitelist:'0123456789.-OoIlBbSsGgZzTtQqUu ',
-      tessedit_pageseg_mode:'7'
-    });
     const{data:{text}}=await worker.recognize(canvas);
-    const raw=text.trim().replace(/\s+/g,' ');
+    // Apply char substitutions BEFORE passing to extractNr
+    const raw=fixChars(text.trim().replace(/\s+/g,' '));
     dbg('OCR raw: "'+raw+'"');
 
     if(document.getElementById('tog-rawtext').checked)
@@ -931,6 +940,70 @@ function flashFrame(success){
 }
 
 // ═══════════════════════════════
+//  MOTION DETECTION + QUALITY GATE
+// ═══════════════════════════════
+// Samples a small downscaled version of the ROI for speed.
+// Returns {stable, contrast} where stable=true means frame hasn't moved much.
+const _motionCanvas = document.createElement('canvas');
+function checkFrameQuality(){
+  const video=document.getElementById('video');
+  if(!video.videoWidth) return {stable:false, contrast:0};
+
+  const wrap=document.getElementById('video-wrap');
+  const frame=document.getElementById('scan-frame');
+  const dW=wrap.offsetWidth, dH=wrap.offsetHeight;
+  const vW=video.videoWidth, vH=video.videoHeight;
+  const vAspect=vW/vH, cAspect=dW/dH;
+  let renderW,renderH,offX,offY;
+  if(vAspect>cAspect){renderH=dH;renderW=dH*vAspect;offX=(dW-renderW)/2;offY=0;}
+  else{renderW=dW;renderH=dW/vAspect;offX=0;offY=(dH-renderH)/2;}
+  const cssZ=camPrefs.cssZoom?(camPrefs.zoom||1):1;
+  const cx=dW/2,cy=dH/2;
+  const fL=parseFloat(frame.style.left),fT=parseFloat(frame.style.top);
+  const fR=fL+parseFloat(frame.style.width),fB=fT+parseFloat(frame.style.height);
+  function uz(x,c){return (x-c)/cssZ+c;}
+  const scX=vW/renderW,scY=vH/renderH;
+  const cropX=Math.max(0,Math.round((uz(fL,cx)-offX)*scX));
+  const cropY=Math.max(0,Math.round((uz(fT,cy)-offY)*scY));
+  const cropW=Math.min(vW-cropX,Math.round((uz(fR,cx)-uz(fL,cx))*scX));
+  const cropH=Math.min(vH-cropY,Math.round((uz(fB,cy)-uz(fT,cy))*scY));
+
+  // Downscale to tiny thumbnail for fast comparison
+  const TW=80, TH=Math.max(1,Math.round(cropH/cropW*TW));
+  _motionCanvas.width=TW; _motionCanvas.height=TH;
+  const ctx=_motionCanvas.getContext('2d');
+  ctx.drawImage(video,cropX,cropY,cropW,cropH,0,0,TW,TH);
+  const imgData=ctx.getImageData(0,0,TW,TH).data;
+
+  // Grayscale + compute mean and motion diff
+  const n=TW*TH;
+  const gray=new Uint8Array(n);
+  let sum=0;
+  for(let i=0;i<n;i++){
+    gray[i]=Math.round(0.299*imgData[i*4]+0.587*imgData[i*4+1]+0.114*imgData[i*4+2]);
+    sum+=gray[i];
+  }
+  const mean=sum/n;
+
+  // Contrast = standard deviation of gray values
+  let variance=0;
+  for(let i=0;i<n;i++) variance+=(gray[i]-mean)**2;
+  const contrast=Math.sqrt(variance/n);
+
+  // Motion = mean absolute difference from previous frame
+  let motion=0;
+  if(_prevFrameData){
+    for(let i=0;i<n;i++) motion+=Math.abs(gray[i]-_prevFrameData[i]);
+    motion/=n;
+  }
+  _prevFrameData=gray;
+
+  const stable = motion<6;       // px avg diff threshold — tune if needed
+  const hasContrast = contrast>12; // min contrast to attempt OCR
+  return {stable, contrast, motion, hasContrast};
+}
+
+// ═══════════════════════════════
 //  SNAP + AUTOSCAN
 // ═══════════════════════════════
 async function doSnap(){
@@ -943,6 +1016,7 @@ function toggleAutoscan(){ autoscanActive?stopAutoscan():startAutoscan(); }
 
 function startAutoscan(){
   autoscanActive=true;
+  _prevFrameData=null; // reset motion baseline
   document.getElementById('autoscan-btn').textContent='⏹ Stopp';
   document.getElementById('autoscan-btn').classList.add('on');
   document.getElementById('autoscan-dot').classList.add('visible');
@@ -951,9 +1025,17 @@ function startAutoscan(){
 
 async function loopAutoscan(){
   while(autoscanActive){
-    if(!ocrBusy && stream) await runOCR(true);
-    // yield to browser between scans to keep UI responsive
-    await new Promise(r=>setTimeout(r,50));
+    if(!ocrBusy && stream){
+      const q=checkFrameQuality();
+      if(q.stable && q.hasContrast){
+        dbg('frame stable (motion='+q.motion.toFixed(1)+' contrast='+q.contrast.toFixed(1)+') → OCR');
+        await runOCR(true);
+      }
+      // short yield regardless — keeps UI responsive
+      await new Promise(r=>setTimeout(r,120));
+    } else {
+      await new Promise(r=>setTimeout(r,50));
+    }
   }
 }
 
