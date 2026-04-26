@@ -422,6 +422,7 @@
 //  STATE
 // ═══════════════════════════════
 let stream=null, worker=null, ocrBusy=false;
+let flashTimeout=null;
 let qty=1, currentNr='', currentName='';
 let autoscanActive=false;
 let log=[], offline=[], cfg={}, camPrefs={};
@@ -852,17 +853,30 @@ async function runOCR(updateDebug){
       dbg('matchArticle: '+(match?match.nr+' exact='+match.exact:'null'));
       if(match){
         setNr(match.nr, match.name, match.exact?'✓ In Liste gefunden':'~ Ähnlicher Artikel — bitte prüfen', match.exact?'conf-high':'conf-med');
-        flashFrame(true);
-        haptic();
-        if(match.exact){dbg('freezeCamera...');freezeCamera();}
-        else if(autoscanActive) stopAutoscan();
       } else {
         const confText=result.conf==='high'?'⚠ Nicht in Artikelliste':result.conf==='medium'?'⚠ Ähnlich, aber nicht in Liste':'⚠ Niedrige Sicherheit';
         setNr(result.nr,'',confText,'conf-low');
       }
     }
   }catch(e){dbg('ERROR runOCR: '+e.message);}
+
+  // Handle freeze/haptic outside try-catch so errors above don't block them
   ocrBusy=false;
+  try{
+    const result2=extractNr(document.getElementById('raw-text').textContent||'');
+    // Re-read current displayed nr to decide freeze
+    if(currentNr){
+      const match=matchArticle(currentNr);
+      if(match&&match.exact){
+        dbg('post-OCR: exact match confirmed, freezing');
+        flashFrame(true);
+        haptic();
+        freezeCamera();
+      } else if(match&&!match.exact&&autoscanActive){
+        stopAutoscan();
+      }
+    }
+  }catch(e2){dbg('ERROR post-OCR: '+e2.message);}
 }
 
 function freezeCamera(){
