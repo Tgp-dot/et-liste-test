@@ -581,23 +581,32 @@ async function startCamera(){
     stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
     const video=document.getElementById('video');
     video.srcObject=stream;
-    video.onloadedmetadata=()=>{
-      positionFrame();
-      const z=camPrefs.zoom||1;
-      document.getElementById('zoom-slider').value=z;
-      applyZoom(z);
-    };
+
+    // Wait until video is actually playing before starting OCR
+    await new Promise(resolve=>{
+      video.oncanplay=()=>resolve();
+      // fallback if oncanplay already fired
+      if(video.readyState>=3) resolve();
+    });
+
+    positionFrame();
+    const z=camPrefs.zoom||1;
+    document.getElementById('zoom-slider').value=z;
+    applyZoom(z);
+
     document.getElementById('start-btn').textContent='Kamera starten';
     document.getElementById('start-btn').style.display='none';
     document.getElementById('stop-btn').style.display='block';
-    // Remove freeze canvas if present
+
+    // Hide freeze canvas if present
     const fc=document.getElementById('freeze-canvas');
     if(fc) fc.style.display='none';
-    const autoOn = document.getElementById('tog-autoscan').checked;
-    // Only show manual buttons when autoscan setting is OFF
-    document.getElementById('autoscan-btn').style.display = autoOn ? 'none' : 'block';
-    document.getElementById('snap-btn').style.display     = autoOn ? 'none' : 'block';
+
+    const autoOn=document.getElementById('tog-autoscan').checked;
+    document.getElementById('autoscan-btn').style.display=autoOn?'none':'block';
+    document.getElementById('snap-btn').style.display=autoOn?'none':'block';
     if(autoOn) startAutoscan();
+
   }catch(e){showToast('Kamera nicht verfügbar');toggleManual();}
 }
 function stopCamera(){
@@ -784,7 +793,9 @@ function haptic(){
 //  OCR CORE
 // ═══════════════════════════════
 async function runOCR(updateDebug){
-  if(ocrBusy||!stream)return;
+  if(ocrBusy||!stream) return;
+  const video=document.getElementById('video');
+  if(!video.videoWidth||video.videoWidth===0) return; // video not ready yet
   ocrBusy=true;
 
   const canvas=document.getElementById('canvas-main');
