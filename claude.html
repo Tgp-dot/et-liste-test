@@ -422,35 +422,6 @@ try{offline=JSON.parse(localStorage.getItem('et_offline')||'[]');}catch(e){}
 try{cfg=JSON.parse(localStorage.getItem('et_cfg')||'{}');}catch(e){}
 try{camPrefs=JSON.parse(localStorage.getItem('et_cam')||'{}');}catch(e){}
 
-// Apply saved prefs
-document.getElementById('flow-url').value=cfg.flowUrl||'';
-document.getElementById('username').value=cfg.user||'';
-document.getElementById('tog-debug').checked=!!camPrefs.debug;
-document.getElementById('tog-autoscan').checked=camPrefs.autoscan!==false; // default ON
-document.getElementById('tog-rawtext').checked=!!camPrefs.rawtext;           // default OFF
-document.getElementById('tog-thresh').checked=camPrefs.thresh!==false;
-document.getElementById('tog-sharp').checked=camPrefs.sharp!==false;
-
-// Camera/frame settings
-const savedRatioW = camPrefs.ratioW||2, savedRatioH = camPrefs.ratioH||1;
-const savedFW = camPrefs.frameW||80, savedFH = camPrefs.frameH||33;
-document.getElementById('cam-ratio-w').value=savedRatioW;
-document.getElementById('cam-ratio-h').value=savedRatioH;
-document.getElementById('frame-w-pct').value=savedFW;
-document.getElementById('frame-h-pct').value=savedFH;
-applyCamRatio(savedRatioW, savedRatioH);
-
-// Article list
-loadArticleList();
-toggleRawBox();
-updateConnBar();
-updateOfflineBadge();
-positionFrame();
-
-// Logo
-const savedLogo = localStorage.getItem('et_logo');
-if(savedLogo) applyLogoSrc(savedLogo);
-
 // ═══════════════════════════════
 //  ARTICLE LIST
 // ═══════════════════════════════
@@ -562,8 +533,8 @@ function applyCamRatio(w,h){
 function applyFrameSettings(){
   const rW=parseFloat(document.getElementById('cam-ratio-w').value)||2;
   const rH=parseFloat(document.getElementById('cam-ratio-h').value)||1;
-  const fW=parseFloat(document.getElementById('frame-w-pct').value)||67;
-  const fH=parseFloat(document.getElementById('frame-h-pct').value)||67;
+  const fW=parseFloat(document.getElementById('frame-w-pct').value)||80;
+  const fH=parseFloat(document.getElementById('frame-h-pct').value)||33;
   camPrefs.ratioW=rW; camPrefs.ratioH=rH;
   camPrefs.frameW=fW; camPrefs.frameH=fH;
   saveCamPrefs();
@@ -616,8 +587,12 @@ async function startCamera(){
       document.getElementById('zoom-slider').value=z;
       applyZoom(z);
     };
+    document.getElementById('start-btn').textContent='Kamera starten';
     document.getElementById('start-btn').style.display='none';
     document.getElementById('stop-btn').style.display='block';
+    // Remove freeze canvas if present
+    const fc=document.getElementById('freeze-canvas');
+    if(fc) fc.style.display='none';
     const autoOn = document.getElementById('tog-autoscan').checked;
     // Only show manual buttons when autoscan setting is OFF
     document.getElementById('autoscan-btn').style.display = autoOn ? 'none' : 'block';
@@ -629,13 +604,15 @@ function stopCamera(){
   stopAutoscan();
   if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
   document.getElementById('video').srcObject=null;
+  document.getElementById('start-btn').textContent='Kamera starten';
   document.getElementById('start-btn').style.display='block';
   document.getElementById('autoscan-btn').style.display='none';
   document.getElementById('snap-btn').style.display='none';
   document.getElementById('stop-btn').style.display='none';
   document.getElementById('debug-wrap').classList.remove('visible');
+  const fc=document.getElementById('freeze-canvas');
+  if(fc) fc.style.display='none';
 }
-
 // ═══════════════════════════════
 //  ZOOM
 // ═══════════════════════════════
@@ -840,11 +817,12 @@ async function runOCR(updateDebug){
       // Match against article list
       const match=matchArticle(result.nr);
       if(match){
-        // Confirmed match
+        // Confirmed match — freeze camera, show result
         setNr(match.nr, match.name, match.exact?'✓ In Liste gefunden':'~ Ähnlicher Artikel — bitte prüfen', match.exact?'conf-high':'conf-med');
         flashFrame(true);
         haptic();
-        if(autoscanActive&&match.exact) stopAutoscan();
+        if(match.exact) freezeCamera();
+        else if(autoscanActive) stopAutoscan();
       } else {
         // OCR result not in list
         const confText=result.conf==='high'?'⚠ Nicht in Artikelliste':result.conf==='medium'?'⚠ Ähnlich, aber nicht in Liste':'⚠ Niedrige Sicherheit';
@@ -856,7 +834,37 @@ async function runOCR(updateDebug){
   ocrBusy=false;
 }
 
-let flashTimeout=null;
+function freezeCamera(){
+  // Stop autoscan loop
+  autoscanActive=false;
+  // Capture last frame onto a visible canvas before killing stream
+  const video=document.getElementById('video');
+  const wrap=document.getElementById('video-wrap');
+  if(video.videoWidth>0){
+    let fc=document.getElementById('freeze-canvas');
+    if(!fc){
+      fc=document.createElement('canvas');
+      fc.id='freeze-canvas';
+      fc.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit;z-index:2;';
+      wrap.appendChild(fc);
+    }
+    fc.width=video.videoWidth; fc.height=video.videoHeight;
+    fc.getContext('2d').drawImage(video,0,0);
+    fc.style.display='block';
+  }
+  // Stop stream
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+  video.srcObject=null;
+  // Update buttons: show "resume" button, hide stop/scan buttons
+  const sb=document.getElementById('start-btn');
+  sb.textContent='▶ Kamera fortsetzen'; sb.style.display='block';
+  document.getElementById('autoscan-btn').style.display='none';
+  document.getElementById('snap-btn').style.display='none';
+  document.getElementById('stop-btn').style.display='none';
+  document.getElementById('autoscan-bar').classList.remove('visible');
+  document.getElementById('autoscan-btn').textContent='▶ Autoscan';
+  document.getElementById('autoscan-btn').classList.remove('on');
+}
 function flashFrame(success){
   const frame=document.getElementById('scan-frame');
   frame.classList.add('success');
@@ -884,9 +892,11 @@ function startAutoscan(){
 }
 
 async function loopAutoscan(){
-  if(!autoscanActive) return;
-  await runOCR(true);
-  if(autoscanActive) loopAutoscan(); // no delay — next scan starts immediately after OCR finishes
+  while(autoscanActive){
+    if(!ocrBusy && stream) await runOCR(true);
+    // yield to browser between scans to keep UI responsive
+    await new Promise(r=>setTimeout(r,50));
+  }
 }
 
 function stopAutoscan(){
@@ -1003,11 +1013,12 @@ async function saveAndTest(){
   catch(e){result.style.color='var(--accent)';result.textContent='✗ Fehler — URL prüfen';}
 }
 function saveCamPrefs(){
-  camPrefs.debug=document.getElementById('tog-debug').checked;
-  camPrefs.autoscan=document.getElementById('tog-autoscan').checked;
-  camPrefs.rawtext=document.getElementById('tog-rawtext').checked;
-  camPrefs.thresh=document.getElementById('tog-thresh').checked;
-  camPrefs.sharp=document.getElementById('tog-sharp').checked;
+  const g = id => { const el=document.getElementById(id); return el?el.checked:undefined; };
+  if(g('tog-debug')!==undefined)   camPrefs.debug=g('tog-debug');
+  if(g('tog-autoscan')!==undefined) camPrefs.autoscan=g('tog-autoscan');
+  if(g('tog-rawtext')!==undefined)  camPrefs.rawtext=g('tog-rawtext');
+  if(g('tog-thresh')!==undefined)   camPrefs.thresh=g('tog-thresh');
+  if(g('tog-sharp')!==undefined)    camPrefs.sharp=g('tog-sharp');
   localStorage.setItem('et_cam',JSON.stringify(camPrefs));
 }
 function copySchema(){const s='{"type":"object","properties":{"bestellnummer":{"type":"string"},"artikelname":{"type":"string"},"menge":{"type":"integer"},"zeitstempel":{"type":"string"},"benutzer":{"type":"string"}}}';navigator.clipboard.writeText(s).then(()=>showToast('Kopiert')).catch(()=>showToast('Manuell kopieren'));}
@@ -1017,6 +1028,39 @@ function copySchema(){const s='{"type":"object","properties":{"bestellnummer":{"
 // ═══════════════════════════════
 let toastTimer;
 function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),3500);}
+
+// ═══════════════════════════════
+//  INIT — runs after all functions defined
+// ═══════════════════════════════
+function init(){
+  // Apply saved prefs to UI
+  document.getElementById('flow-url').value=cfg.flowUrl||'';
+  document.getElementById('username').value=cfg.user||'';
+  document.getElementById('tog-debug').checked=!!camPrefs.debug;
+  document.getElementById('tog-autoscan').checked=camPrefs.autoscan!==false;
+  document.getElementById('tog-rawtext').checked=!!camPrefs.rawtext;
+  document.getElementById('tog-thresh').checked=camPrefs.thresh!==false;
+  document.getElementById('tog-sharp').checked=camPrefs.sharp!==false;
+
+  // Camera/frame settings
+  const rW=camPrefs.ratioW||2, rH=camPrefs.ratioH||1;
+  const fW=camPrefs.frameW||80, fH=camPrefs.frameH||33;
+  document.getElementById('cam-ratio-w').value=rW;
+  document.getElementById('cam-ratio-h').value=rH;
+  document.getElementById('frame-w-pct').value=fW;
+  document.getElementById('frame-h-pct').value=fH;
+  applyCamRatio(rW, rH);
+
+  loadArticleList();
+  toggleRawBox();
+  updateConnBar();
+  updateOfflineBadge();
+  positionFrame();
+
+  const savedLogo=localStorage.getItem('et_logo');
+  if(savedLogo) applyLogoSrc(savedLogo);
+}
+init();
 </script>
 </body>
 </html>
