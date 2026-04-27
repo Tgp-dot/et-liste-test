@@ -248,11 +248,11 @@
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-          <button class="btn btn-accent" id="start-btn" onclick="startCamera()" style="grid-column:1/-1;margin:0">Kamera starten</button>
+          <button class="btn btn-accent" id="start-btn" onclick="haptic();startCamera()" style="grid-column:1/-1;margin:0">Kamera starten</button>
           <button class="btn btn-toggle" id="autoscan-btn" onclick="toggleAutoscan()" style="display:none;margin:0">▶ Autoscan</button>
           <button class="btn btn-outline btn-sm" id="snap-btn" onclick="doSnap()" style="display:none;margin:0">📷 Einzelscan</button>
         </div>
-        <button class="btn btn-outline btn-sm" id="stop-btn" style="display:none" onclick="stopCamera()">Kamera stoppen</button>
+        <button class="btn btn-outline btn-sm" id="stop-btn" style="display:none" onclick="haptic();stopCamera()">Kamera stoppen</button>
       </div>
 
       <!-- Result -->
@@ -298,7 +298,7 @@
           <input id="qty-input" type="number" min="1" max="9999" inputmode="numeric" pattern="[0-9]*" onblur="endQtyEdit()" onkeydown="if(event.key==='Enter')this.blur()"/>
           <button class="qty-btn" onclick="chgQty(1)">+</button>
         </div>
-        <button class="btn btn-accent" id="submit-btn" onclick="submitOrder()">In Excel-Liste eintragen</button>
+        <button class="btn btn-accent" id="submit-btn" onclick="haptic();submitOrder()">In Excel-Liste eintragen</button>
         <div id="submit-status"></div>
       </div>
     </div>
@@ -641,7 +641,6 @@ function applyAutoscanSetting(){
 //  CAMERA
 // ═══════════════════════════════
 async function startCamera(){
-  initHaptic();
   clearResult();
   dbg('startCamera: getUserMedia...');
   try{
