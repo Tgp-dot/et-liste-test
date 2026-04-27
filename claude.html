@@ -835,33 +835,28 @@ function extractNr(raw){
 // ═══════════════════════════════
 //  HAPTIK
 // ═══════════════════════════════
-// WebKit requires the click event to propagate through a <label> element.
-// Directly toggling input.checked or clicking the input itself does NOT trigger haptics.
-let _hapticLabel = null;
-function initHaptic(){
-  if(_hapticLabel) return;
+// Matches the use-haptic library approach: create a fresh input+label pair,
+// click the label (WebKit requirement), then immediately remove both.
+// A persistent element in the DOM does NOT trigger haptics reliably.
+function initHaptic(){ /* nothing to pre-initialize */ }
+function haptic(){
   try{
     const input = document.createElement('input');
     input.type = 'checkbox';
-    input.setAttribute('switch', '');          // <input type="checkbox" switch>
-    input.id = '_haptic_switch';
-    input.style.cssText = 'position:fixed;top:-2px;left:-2px;width:1px;height:1px;opacity:0.01;pointer-events:none;';
+    input.setAttribute('switch', '');
+    input.id = '_h' + Date.now();
+    input.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0.01;pointer-events:none;';
 
     const label = document.createElement('label');
-    label.htmlFor = '_haptic_switch';
-    label.style.cssText = 'position:fixed;top:-2px;left:-2px;width:1px;height:1px;opacity:0.01;pointer-events:none;';
+    label.htmlFor = input.id;
+    label.style.cssText = input.style.cssText;
 
     document.body.appendChild(input);
     document.body.appendChild(label);
-    _hapticLabel = label;
-    dbg('haptic: label+input[switch] created, type='+input.type);
-  }catch(e){ dbg('haptic init error: '+e); }
-}
-function haptic(){
-  if(!_hapticLabel) return;
-  try{
-    // Must click the LABEL, not the input — WebKit requirement for haptic trigger
-    _hapticLabel.click();
+    label.click();
+    // Remove immediately after click
+    document.body.removeChild(label);
+    document.body.removeChild(input);
   }catch(e){}
 }
 
