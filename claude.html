@@ -243,7 +243,7 @@
 
         <div class="zoom-row">
           <span class="zoom-label">Zoom</span>
-          <input type="range" id="zoom-slider" min="1" max="8" step="0.1" value="1" oninput="applyZoom(this.value)"/>
+          <input type="range" id="zoom-slider" min="1" max="8" step="0.1" value="1" oninput="zoomSliderInput(this.value)"/>
           <span class="zoom-val" id="zoom-val">1.0×</span>
         </div>
 
@@ -287,16 +287,18 @@
         </div>
 
         <div id="manual-wrap" style="display:none;margin-bottom:8px">
-          <input class="text-input" id="manual-input" type="text" placeholder="000-000.000-000" autocapitalize="none" autocorrect="off" onkeydown="if(event.key==='Enter')applyManual()"/>
+          <input class="text-input" id="manual-input" type="text" placeholder="___-___.___-___"
+            autocapitalize="none" autocorrect="off" autocomplete="off" inputmode="numeric"
+            maxlength="15" oninput="maskOrderNr(this)" onkeydown="orderNrKeydown(event)" onpaste="orderNrPaste(event)"/>
           <button class="btn btn-outline btn-sm" onclick="applyManual()">Übernehmen</button>
         </div>
 
         <div class="card-title" style="margin-top:12px">Bestellmenge</div>
         <div class="qty-row">
-          <button class="qty-btn" onclick="chgQty(-1)">−</button>
+          <button class="qty-btn" onclick="haptic();chgQty(-1)">−</button>
           <div id="qty-val" onclick="startQtyEdit()">1</div>
           <input id="qty-input" type="number" min="1" max="9999" inputmode="numeric" pattern="[0-9]*" onblur="endQtyEdit()" onkeydown="if(event.key==='Enter')this.blur()"/>
-          <button class="qty-btn" onclick="chgQty(1)">+</button>
+          <button class="qty-btn" onclick="haptic();chgQty(1)">+</button>
         </div>
         <button class="btn btn-accent" id="submit-btn" onclick="haptic();submitOrder()">In Excel-Liste eintragen</button>
         <div id="submit-status"></div>
@@ -402,12 +404,13 @@
       <!-- Bildverarbeitung -->
       <div class="card">
         <div class="card-title">Bildverarbeitung</div>
-        <div class="toggle-row"><span>Autoscan (läuft automatisch, Buttons ausgeblendet)</span><label class="toggle"><input type="checkbox" id="tog-autoscan" checked onchange="applyAutoscanSetting()"><span class="tslider"></span></label></div>
-        <div class="toggle-row"><span>Debug-Vorschau (verarbeitetes Bild)</span><label class="toggle"><input type="checkbox" id="tog-debug" onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
-        <div class="toggle-row"><span>OCR Rohtext anzeigen</span><label class="toggle"><input type="checkbox" id="tog-rawtext" onchange="toggleRawBox()"><span class="tslider"></span></label></div>
-        <div class="toggle-row"><span>Debug Log anzeigen</span><label class="toggle"><input type="checkbox" id="tog-dbglog" onchange="toggleDbgBox()"><span class="tslider"></span></label></div>
-        <div class="toggle-row"><span>Adaptive Binarisierung (Sauvola)</span><label class="toggle"><input type="checkbox" id="tog-thresh" checked onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
-        <div class="toggle-row"><span>Schärfung (Unsharp Mask)</span><label class="toggle"><input type="checkbox" id="tog-sharp" checked onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
+        <div class="toggle-row"><span>Haptisches Feedback</span><label class="toggle"><input type="checkbox" id="tog-haptic" checked onchange="saveCamPrefs()"><span class="tslider"></span></label></div>
+        <div class="toggle-row"><span>Autoscan (läuft automatisch, Buttons ausgeblendet)</span><label class="toggle"><input type="checkbox" id="tog-autoscan" checked onchange="haptic();applyAutoscanSetting()"><span class="tslider"></span></label></div>
+        <div class="toggle-row"><span>Debug-Vorschau (verarbeitetes Bild)</span><label class="toggle"><input type="checkbox" id="tog-debug" onchange="haptic();saveCamPrefs()"><span class="tslider"></span></label></div>
+        <div class="toggle-row"><span>OCR Rohtext anzeigen</span><label class="toggle"><input type="checkbox" id="tog-rawtext" onchange="haptic();toggleRawBox()"><span class="tslider"></span></label></div>
+        <div class="toggle-row"><span>Debug Log anzeigen</span><label class="toggle"><input type="checkbox" id="tog-dbglog" onchange="haptic();toggleDbgBox()"><span class="tslider"></span></label></div>
+        <div class="toggle-row"><span>Adaptive Binarisierung (Sauvola)</span><label class="toggle"><input type="checkbox" id="tog-thresh" checked onchange="haptic();saveCamPrefs()"><span class="tslider"></span></label></div>
+        <div class="toggle-row"><span>Schärfung (Unsharp Mask)</span><label class="toggle"><input type="checkbox" id="tog-sharp" checked onchange="haptic();saveCamPrefs()"><span class="tslider"></span></label></div>
       </div>
 
       <!-- PA Einrichtung -->
@@ -834,30 +837,79 @@ function extractNr(raw){
 // ═══════════════════════════════
 //  HAPTIK
 // ═══════════════════════════════
-// Matches the use-haptic library approach: create a fresh input+label pair,
-// click the label (WebKit requirement), then immediately remove both.
-// A persistent element in the DOM does NOT trigger haptics reliably.
-function initHaptic(){ /* nothing to pre-initialize */ }
 function haptic(){
+  const tog = document.getElementById('tog-haptic');
+  if(tog && !tog.checked) return; // globally disabled
   try{
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.setAttribute('switch', '');
     input.id = '_h' + Date.now();
     input.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0.01;pointer-events:none;';
-
     const label = document.createElement('label');
     label.htmlFor = input.id;
     label.style.cssText = input.style.cssText;
-
     document.body.appendChild(input);
     document.body.appendChild(label);
     label.click();
-    // Remove immediately after click
     document.body.removeChild(label);
     document.body.removeChild(input);
   }catch(e){}
 }
+
+// ═══════════════════════════════
+//  ZOOM SLIDER — haptic per step
+// ═══════════════════════════════
+let _lastZoomStep = null;
+function zoomSliderInput(val){
+  const step = Math.round(parseFloat(val) * 10); // steps of 0.1
+  if(_lastZoomStep !== null && step !== _lastZoomStep) haptic();
+  _lastZoomStep = step;
+  applyZoom(val);
+}
+
+// ═══════════════════════════════
+//  ORDER NUMBER MASKING
+//  Format: 000-000.000-000
+//  Auto-inserts - and . at positions 3, 7, 11
+// ═══════════════════════════════
+function maskOrderNr(input){
+  // Extract only digits from current value
+  const digits = input.value.replace(/\D/g,'').slice(0,12);
+  let masked = '';
+  for(let i=0;i<digits.length;i++){
+    if(i===3) masked+='-';
+    else if(i===6) masked+='.';
+    else if(i===9) masked+='-';
+    masked+=digits[i];
+  }
+  input.value = masked;
+  // Visual feedback: valid = green border, invalid = default
+  const valid = ORDER_RE.test(masked);
+  input.style.borderColor = digits.length===0 ? '' : valid ? 'var(--success)' : digits.length<12 ? 'var(--border-med)' : 'var(--accent)';
+  input.style.boxShadow   = valid ? '0 0 0 2px rgba(16,124,16,0.15)' : '';
+}
+
+function orderNrKeydown(e){
+  // Allow: backspace, delete, tab, escape, enter, arrows
+  const allowed = ['Backspace','Delete','Tab','Escape','Enter','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'];
+  if(allowed.includes(e.key)) return;
+  // Block non-digits
+  if(!/^\d$/.test(e.key)){ e.preventDefault(); return; }
+  // Block if already 12 digits
+  const digits = e.target.value.replace(/\D/g,'');
+  if(digits.length>=12) e.preventDefault();
+}
+
+function orderNrPaste(e){
+  e.preventDefault();
+  const pasted = (e.clipboardData||window.clipboardData).getData('text');
+  const digits = pasted.replace(/\D/g,'').slice(0,12);
+  e.target.value = digits; // temporarily set raw digits
+  maskOrderNr(e.target);   // reformat
+}
+
+function initHaptic(){ /* nothing */ }
 
 // ═══════════════════════════════
 //  OCR CORE
@@ -1206,7 +1258,8 @@ function applyScanParams(){
 
 function saveCamPrefs(){
   const g = id => { const el=document.getElementById(id); return el?el.checked:undefined; };
-  if(g('tog-debug')!==undefined)   camPrefs.debug=g('tog-debug');
+  if(g('tog-haptic')!==undefined)   camPrefs.haptic=g('tog-haptic');
+  if(g('tog-debug')!==undefined)    camPrefs.debug=g('tog-debug');
   if(g('tog-autoscan')!==undefined) camPrefs.autoscan=g('tog-autoscan');
   if(g('tog-rawtext')!==undefined)  camPrefs.rawtext=g('tog-rawtext');
   if(g('tog-thresh')!==undefined)   camPrefs.thresh=g('tog-thresh');
@@ -1228,6 +1281,7 @@ function init(){
   // Apply saved prefs to UI
   document.getElementById('flow-url').value=cfg.flowUrl||'';
   document.getElementById('username').value=cfg.user||'';
+  document.getElementById('tog-haptic').checked=camPrefs.haptic!==false; // default ON
   document.getElementById('tog-debug').checked=!!camPrefs.debug;
   document.getElementById('tog-autoscan').checked=camPrefs.autoscan!==false;
   document.getElementById('tog-rawtext').checked=!!camPrefs.rawtext;
