@@ -835,26 +835,33 @@ function extractNr(raw){
 // ═══════════════════════════════
 //  HAPTIK
 // ═══════════════════════════════
-// input[type=switch] triggers native Taptic Engine in Safari 18+ / iOS 18+.
-// Element must be visible (not display:none, not opacity:0) and in the DOM.
-// opacity:0.01 + tiny size keeps it invisible while still "existing" for Safari.
-let _hapticInput = null;
+// WebKit requires the click event to propagate through a <label> element.
+// Directly toggling input.checked or clicking the input itself does NOT trigger haptics.
+let _hapticLabel = null;
 function initHaptic(){
-  if(_hapticInput) return;
+  if(_hapticLabel) return;
   try{
-    const el = document.createElement('input');
-    el.type = 'switch';
-    el.style.cssText = 'position:fixed;top:-1px;left:-1px;width:1px;height:1px;opacity:0.01;pointer-events:none;';
-    document.body.appendChild(el);
-    _hapticInput = el;
-    dbg('haptic: input[type='+el.type+'] created');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.setAttribute('switch', '');          // <input type="checkbox" switch>
+    input.id = '_haptic_switch';
+    input.style.cssText = 'position:fixed;top:-2px;left:-2px;width:1px;height:1px;opacity:0.01;pointer-events:none;';
+
+    const label = document.createElement('label');
+    label.htmlFor = '_haptic_switch';
+    label.style.cssText = 'position:fixed;top:-2px;left:-2px;width:1px;height:1px;opacity:0.01;pointer-events:none;';
+
+    document.body.appendChild(input);
+    document.body.appendChild(label);
+    _hapticLabel = label;
+    dbg('haptic: label+input[switch] created, type='+input.type);
   }catch(e){ dbg('haptic init error: '+e); }
 }
 function haptic(){
-  if(!_hapticInput) return;
+  if(!_hapticLabel) return;
   try{
-    _hapticInput.checked = !_hapticInput.checked;
-    _hapticInput.dispatchEvent(new Event('change',{bubbles:true}));
+    // Must click the LABEL, not the input — WebKit requirement for haptic trigger
+    _hapticLabel.click();
   }catch(e){}
 }
 
