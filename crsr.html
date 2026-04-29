@@ -430,6 +430,7 @@
         <div class="toggle-row"><span>Debug Log anzeigen</span><label class="toggle"><input type="checkbox" id="tog-dbglog" onchange="haptic();toggleDbgBox()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>Adaptive Binarisierung (Sauvola)</span><label class="toggle"><input type="checkbox" id="tog-thresh" checked onchange="haptic();saveCamPrefs()"><span class="tslider"></span></label></div>
         <div class="toggle-row"><span>Schärfung (Unsharp Mask)</span><label class="toggle"><input type="checkbox" id="tog-sharp" checked onchange="haptic();saveCamPrefs()"><span class="tslider"></span></label></div>
+        <div class="toggle-row"><span>Auto-Zoom Recovery bei OCR-Fehlern</span><label class="toggle"><input type="checkbox" id="tog-recovery" checked onchange="haptic();saveCamPrefs()"><span class="tslider"></span></label></div>
       </div>
 
       <!-- PA Einrichtung -->
@@ -450,7 +451,7 @@
       </div>
     </div>
   </div><!-- end main-scroll -->
-  <div class="app-footer">Copyright L.Hug 2026</div>
+  <div class="app-footer">L.Hug 2026</div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -459,9 +460,8 @@
 <!--  Format: one entry per line: NR - NAME                    -->
 <!-- ═══════════════════════════════════════════════════════════ -->
 <script id="builtin-list" type="text/plain">
-123-456.789-012 - Hydraulikfilter
-234-567.890-123 - Luftfilter
-345-678.901-234 - Ölfilter
+123-456.789-012 - M9 Sensor
+234-567.890-123 - Schwarzes Logo
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -478,6 +478,9 @@ let qty=1, currentNr='', currentName='';
 let autoscanActive=false;
 let log=[], offline=[], cfg={}, camPrefs={};
 let articleMap = {}; // nr -> name
+let ocrMissStreak=0;
+let ocrRecoveryActive=false;
+let ocrHiddenZoomMul=1; // extra OCR-only zoom (invisible in preview)
 const SCAN_PRESETS = {
   robust:      { motionThresh: 12, contrastMin: 6, pauseMs: 320, checkMs: 35, captureW: 1920, captureH: 1080, frameRate: 30 },
   balanced:    { motionThresh: 14, contrastMin: 8, pauseMs: 250, checkMs: 30, captureW: 1280, captureH: 720,  frameRate: 30 },
@@ -723,6 +726,8 @@ async function startCamera(){
 function stopCamera(){
   stopAutoscan();
   if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+  ocrHiddenZoomMul=1;
+  ocrRecoveryActive=false;
   document.getElementById('video').srcObject=null;
   document.getElementById('start-btn').textContent='Kamera starten';
   document.getElementById('start-btn').style.display='block';
@@ -789,11 +794,14 @@ function grabROI(targetCanvas){
   else{renderW=dW;renderH=dW/vAspect;offX=0;offY=(dH-renderH)/2;}
 
   // CSS zoom compensation (only if native zoom unavailable)
+  // + hidden OCR-only zoom multiplier (kept invisible for the user)
   const cssZ=camPrefs.cssZoom?(camPrefs.zoom||1):1;
+  const ocrZ=Math.max(1, ocrHiddenZoomMul||1);
+  const effZ=cssZ*ocrZ;
   const cx=dW/2,cy=dH/2;
   const fL=parseFloat(frame.style.left),fT=parseFloat(frame.style.top);
   const fR=fL+parseFloat(frame.style.width),fB=fT+parseFloat(frame.style.height);
-  function uz(x,c){return (x-c)/cssZ+c;}
+  function uz(x,c){return (x-c)/effZ+c;}
   const uL=uz(fL,cx),uT=uz(fT,cy),uR=uz(fR,cx),uB=uz(fB,cy);
 
   const scX=vW/renderW, scY=vH/renderH;
@@ -980,13 +988,16 @@ function initHaptic(){ /* nothing */ }
 // ═══════════════════════════════
 //  OCR CORE
 // ═══════════════════════════════
-async function runOCR(updateDebug){
-  if(ocrBusy||!stream) return;
+async function runOCR(updateDebug,opts={}){
+  const fromRecovery=!!opts.fromRecovery;
+  if(ocrBusy||!stream) return false;
   const video=document.getElementById('video');
-  if(!video.videoWidth||video.videoWidth===0){dbg('runOCR: videoWidth=0, skip');return;}
+  if(!video.videoWidth||video.videoWidth===0){dbg('runOCR: videoWidth=0, skip');return false;}
   ocrBusy=true;
   setOcrIndicator(true);
   dbg('runOCR: grabROI...');
+  let hadHit=false;
+  let shouldStartRecovery=false;
 
   const canvas=document.getElementById('canvas-main');
   grabROI(canvas);
@@ -1026,6 +1037,8 @@ async function runOCR(updateDebug){
       const match=matchArticle(result.nr);
       dbg('matchArticle: '+(match?match.nr+' exact='+match.exact:'null'));
       if(match){
+        hadHit=true;
+        ocrMissStreak=0;
         setNr(match.nr, match.name, match.exact?'✓ In Liste gefunden':'~ Ähnlicher Artikel — bitte prüfen', match.exact?'conf-high':'conf-med');
         if(!scanningPaused){
           dbg((match.exact?'exact':'fuzzy')+' match → freeze');
@@ -1033,17 +1046,49 @@ async function runOCR(updateDebug){
           flashFrame(true);
           haptic();
           freezeCamera();
-          return;
+          return true;
         }
       } else {
+        hadHit=true; // valid number was read, even if not in article list
+        ocrMissStreak=0;
         const confText=result.conf==='high'?'⚠ Nicht in Artikelliste':result.conf==='medium'?'⚠ Ähnlich, aber nicht in Liste':'⚠ Niedrige Sicherheit';
         setNr(result.nr,'',confText,'conf-low');
+      }
+    }else{
+      ocrMissStreak++;
+      if(!fromRecovery&&!ocrRecoveryActive&&camPrefs.recoveryZoom!==false&&ocrMissStreak>=3){
+        shouldStartRecovery=true;
+        ocrMissStreak=0;
       }
     }
   }catch(e){dbg('ERROR runOCR: '+e.message);}
   finally{
     ocrBusy=false;
     setOcrIndicator(false);
+  }
+  if(shouldStartRecovery&&stream){
+    await runHiddenZoomRecovery(updateDebug);
+  }
+  return hadHit;
+}
+
+async function runHiddenZoomRecovery(updateDebug){
+  if(ocrRecoveryActive||!stream) return;
+  ocrRecoveryActive=true;
+  const baseZoom=Math.max(1,Math.min(8,camPrefs.zoom||1));
+  dbg('OCR recovery start from '+baseZoom.toFixed(1)+'x');
+  try{
+    for(let z=Math.min(8,baseZoom+0.2);z<=8.0001;z+=0.2){
+      if(!stream) break;
+      ocrHiddenZoomMul=Math.max(1,z/baseZoom);
+      dbg('OCR recovery hidden zoom '+z.toFixed(1)+'x');
+      const hit=await runOCR(updateDebug,{fromRecovery:true});
+      if(hit) break;
+    }
+  }finally{
+    ocrHiddenZoomMul=1;
+    ocrRecoveryActive=false;
+    dbg('OCR recovery end');
   }
 }
 
@@ -1239,6 +1284,8 @@ function endQtyEdit(){const i=document.getElementById('qty-input'),v=document.ge
 function clearResult(){
   currentNr=''; currentName='';
   scanningPaused=false;
+  ocrMissStreak=0;
+  ocrHiddenZoomMul=1;
   const el=document.getElementById('result-nr');
   el.innerHTML='<span class="result-hint-text">— noch nicht gescannt —</span>';
   document.getElementById('result-conf').textContent='';
@@ -1396,6 +1443,7 @@ function saveCamPrefs(){
   if(g('tog-rawtext')!==undefined)  camPrefs.rawtext=g('tog-rawtext');
   if(g('tog-thresh')!==undefined)   camPrefs.thresh=g('tog-thresh');
   if(g('tog-sharp')!==undefined)    camPrefs.sharp=g('tog-sharp');
+  if(g('tog-recovery')!==undefined) camPrefs.recoveryZoom=g('tog-recovery');
   localStorage.setItem('et_cam',JSON.stringify(camPrefs));
 }
 function copySchema(){const s='{"type":"object","properties":{"bestellnummer":{"type":"string"},"artikelname":{"type":"string"},"menge":{"type":"integer"},"zeitstempel":{"type":"string"},"benutzer":{"type":"string"}}}';navigator.clipboard.writeText(s).then(()=>showToast('Kopiert')).catch(()=>showToast('Manuell kopieren'));}
@@ -1420,6 +1468,7 @@ function init(){
   document.getElementById('tog-rawtext').checked=!!camPrefs.rawtext;
   document.getElementById('tog-thresh').checked=camPrefs.thresh!==false;
   document.getElementById('tog-sharp').checked=camPrefs.sharp!==false;
+  document.getElementById('tog-recovery').checked=camPrefs.recoveryZoom!==false;
 
   // Camera/frame settings
   const rW=camPrefs.ratioW||2, rH=camPrefs.ratioH||1;
