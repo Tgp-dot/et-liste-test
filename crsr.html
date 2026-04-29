@@ -1075,10 +1075,11 @@ async function runOCR(updateDebug,opts={}){
 async function runHiddenZoomRecovery(updateDebug){
   if(ocrRecoveryActive||!stream) return;
   ocrRecoveryActive=true;
-  const baseZoom=Math.max(1,Math.min(8,camPrefs.zoom||1));
+  const RECOVERY_MAX_ZOOM=5;
+  const baseZoom=Math.max(1,Math.min(RECOVERY_MAX_ZOOM,camPrefs.zoom||1));
   dbg('OCR recovery start from '+baseZoom.toFixed(1)+'x');
   try{
-    for(let z=Math.min(8,baseZoom+0.2);z<=8.0001;z+=0.2){
+    for(let z=Math.min(RECOVERY_MAX_ZOOM,baseZoom+0.2);z<=RECOVERY_MAX_ZOOM+0.0001;z+=0.2){
       if(!stream) break;
       ocrHiddenZoomMul=Math.max(1,z/baseZoom);
       dbg('OCR recovery hidden zoom '+z.toFixed(1)+'x');
